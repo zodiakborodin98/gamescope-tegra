@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "new_whole_stack_hardware_qualified": false,
+  "components": {
+    "mesa": {
+      "kind": "tar",
+      "url": "https://archive.mesa3d.org/mesa-26.0.3.tar.xz",
+      "version": "26.0.3",
+      "sha256": "ddb7443d328e89aa45b4b6b80f077bf937f099daeca8ba48cabe32aab769e134",
+      "size": 43855948,
+      "upstream_license": "retain Mesa component licenses",
+      "historical_signature": "VALIDSIG Eric Engestrom 57551DE15B968F6341C248F68D8E31AFC32428A6; checked 2026-10-03",
+      "patches": [
+        "mesa-drisw-drawable-depth.patch"
+      ],
+      "patch_sha256": {
+        "mesa-drisw-drawable-depth.patch": "5f5d48aaf5292e5e4c0b23fbfc90eb1373ef644714ef0f6b6e191c0f9703fbe8"
+      }
+    },
+    "xwayland": {
+      "kind": "git",
+      "url": "https://gitlab.freedesktop.org/xorg/xserver",
+      "commit": "9b10be9933c4e814e4b954a848c9ca55b629a91b",
+      "version": "23.2.7",
+      "upstream_license": "X.Org MIT and retained per-file notices",
+      "patches": [
+        "xwayland-screen-size-override.patch"
+      ],
+      "patch_sha256": {
+        "xwayland-screen-size-override.patch": "a2d2f3e7914196ff44aac945225a250f37391dd106dc7280223ce45428358643"
+      }
+    },
+    "wayland": {
+      "kind": "git",
+      "url": "https://gitlab.freedesktop.org/wayland/wayland.git",
+      "commit": "87cc8a8728a923fc57938faa81ba0e74f34ecdc7",
+      "version": "1.26.0",
+      "upstream_license": "MIT with retained notices",
+      "patches": [],
+      "patch_sha256": {}
+    },
+    "egl-wayland": {
+      "kind": "git",
+      "url": "https://github.com/NVIDIA/egl-wayland",
+      "commit": "2a953fc86ca5707466ff28c117b0b72de87d9316",
+      "version": "1.1.23",
+      "upstream_license": "MIT with retained NVIDIA notices",
+      "patches": [],
+      "patch_sha256": {}
+    }
+  },
+  "llvm": {
+    "runtime_version": "19.1",
+    "role": "llvmpipe; target AArch64 shared LLVM supplied by compatible sysroot",
+    "native_macro_fix": "llvm-aarch64-native-metadata.patch",
+    "do_not_build_llvm_from_scratch_by_default": true
+  }
+}

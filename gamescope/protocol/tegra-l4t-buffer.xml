@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="tegra_l4t_buffer">
+  <copyright>
+    Copyright © 2026 SteamOS-Switch native-gamescope effort
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  </copyright>
+
+  <description summary="private Tegra L4T GPU client buffer transport (v2)">
+    THIS IS A PRIVATE GAMESCOPE PROTOCOL. Regular Wayland clients must NOT use
+    it.
+
+    Per-slot IMMUTABLE registration of a cross-process NVIDIA OPAQUE_FD Vulkan
+    *buffer* (NOT DMA_BUF_EXT, NOT linux-dmabuf) plus the exact allocation and
+    synchronisation payloads:
+
+      memoryFD, ready binary-semaphoreFD (producer signals), returned
+      binary-semaphoreFD (consumer signals), VkBufferCreateInfo size/usage/
+      sharing, VkMemoryAllocateInfo allocationSize + original memoryTypeIndex,
+      dedicated-allocation status, and deviceUUID/driverUUID.
+
+    The created object is a real wl_buffer: the client attaches it to a real
+    wl_surface and commits. The compositor imports the *matching* OPAQUE_FD
+    payloads on its own VkDevice/queue. The CPU only handles metadata and fds.
+
+    Registration alone must never mark a slot pending or wait on an uncommitted
+    buffer. Import may be refused if the metadata does not exactly match a
+    supported configuration (fail closed).
+  </description>
+
+  <interface name="tegra_l4t_buffer_manager" version="1">
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager"/>
+    </request>
+
+    <enum name="error">
+      <entry name="unsupported" value="0" summary="unsupported metadata/format"/>
+      <entry name="bad_metadata" value="1" summary="inconsistent/bounded metadata"/>
+    </enum>
+
+    <request name="register_buffer">
+      <description summary="register a slot and return its wl_buffer"/>
+      <arg name="id" type="new_id" interface="wl_buffer"/>
+
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="drm_format" type="uint" summary="DRM_FORMAT_* (RGBA8 only in v2)"/>
+
+      <!-- exact Vulkan creation parameters, preserved verbatim -->
+      <arg name="buffer_size" type="uint" summary="VkBufferCreateInfo.size"/>
+      <arg name="buffer_usage" type="uint" summary="VkBufferUsageFlags"/>
+      <arg name="buffer_sharing" type="uint" summary="0=exclusive"/>
+      <arg name="allocation_size" type="uint" summary="VkMemoryRequirements.size of the exported memory"/>
+      <arg name="memory_type_index" type="uint" summary="original VkDeviceMemory type index"/>
+      <arg name="memory_type_bits" type="uint" summary="VkMemoryRequirements.memoryTypeBits"/>
+      <arg name="memory_property_flags" type="uint" summary="chosen memory property flags"/>
+      <arg name="dedicated" type="uint" summary="1 if a dedicated allocation was used"/>
+
+      <arg name="device_uuid" type="array" summary="16-byte VkPhysicalDeviceIDProperties::deviceUUID"/>
+      <arg name="driver_uuid" type="array" summary="16-byte VkPhysicalDeviceIDProperties::driverUUID"/>
+
+      <arg name="memory_fd" type="fd" summary="OPAQUE_FD exported device memory"/>
+      <arg name="ready_fd" type="fd" summary="OPAQUE_FD exported binary semaphore: producer signals"/>
+      <arg name="returned_fd" type="fd" summary="OPAQUE_FD exported binary semaphore: consumer signals"/>
+    </request>
+  </interface>
+</protocol>

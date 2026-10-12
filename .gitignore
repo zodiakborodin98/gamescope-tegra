@@ -1,0 +1,16 @@
+_work/
+downloads/
+sysroots/
+build/
+stage/
+__pycache__/
+*.pyc
+gamescope/src/reshade/
+gamescope/thirdparty/SPIRV-Headers/
+gamescope/subprojects/libdisplay-info/
+gamescope/subprojects/libliftoff/
+gamescope/subprojects/openvr/
+gamescope/subprojects/vkroots/
+gamescope/subprojects/wlroots/
+gamescope/subprojects/glm/
+gamescope/subprojects/stb/

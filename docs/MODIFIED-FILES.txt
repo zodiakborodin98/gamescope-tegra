@@ -1,0 +1,64 @@
+Gamescope Tegra publication modifications
+Prepared/reconstructed 2026-10-12; retain original source notices/authorship.
+Compared against upstream 6867f509874f9bc52e12d6f4c4596cdf0d5be6b4.
+ADDED/MODIFIED: port adaptations and publication material; this is the
+publication preparation date, not a guessed date for every historical edit.
+Removed editor/CI/Steam Deck deployment helpers are unrelated to this port.
+
+2026-10-12 MODIFIED gamescope/README.md
+2026-10-12 ADDED    gamescope/README.upstream.md
+2026-10-12 MODIFIED gamescope/protocol/meson.build
+2026-10-12 ADDED    gamescope/protocol/tegra-l4t-buffer.xml
+2026-10-12 MODIFIED gamescope/src/Apps/gamescopereaper.cpp
+2026-10-12 ADDED    gamescope/src/Backends/TegraL4TBackend.cpp
+2026-10-12 ADDED    gamescope/src/Backends/TegraL4TBackend.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/PROVENANCE.md
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/eglstream/source/wayland-eglstream-controller.xml
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/eglstream/source/wayland-eglstream.xml
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/eglstream/wayland-eglstream-controller-protocol.c
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/eglstream/wayland-eglstream-controller-server-protocol.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/eglstream/wayland-eglstream-protocol.c
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/eglstream/wayland-eglstream-server-protocol.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/gob_swizzle_spv.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/gob_swizzle_sx1.comp
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/nvhost_ioctl.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_dc_ext.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_l4t_eglstream.cpp
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_l4t_first_frame.cpp
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_l4t_first_frame.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_l4t_presenter.cpp
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_l4t_presenter.h
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/tegra_l4t_transport.cpp
+2026-10-12 ADDED    gamescope/src/Backends/tegra_l4t/uapi/linux/types.h
+2026-10-12 MODIFIED gamescope/src/Utils/Process.cpp
+2026-10-12 MODIFIED gamescope/src/backends.h
+2026-10-12 MODIFIED gamescope/src/main.cpp
+2026-10-12 MODIFIED gamescope/src/meson.build
+2026-10-12 MODIFIED gamescope/src/rendervulkan.cpp
+2026-10-12 MODIFIED gamescope/src/rendervulkan.hpp
+2026-10-12 MODIFIED gamescope/src/shaders/composite.h
+2026-10-12 MODIFIED gamescope/src/shaders/descriptor_set.h
+2026-10-12 MODIFIED gamescope/src/steamcompmgr.cpp
+2026-10-12 MODIFIED gamescope/src/wlserver.cpp
+2026-10-12 MODIFIED gamescope/subprojects/.gitignore
+2026-10-12 OMITTED  gamescope/.github/ISSUE_TEMPLATE/bug_report.yml
+2026-10-12 OMITTED  gamescope/.github/ISSUE_TEMPLATE/feature_request.yml
+2026-10-12 OMITTED  gamescope/.github/workflows/main.yml
+2026-10-12 OMITTED  gamescope/.vscode/launch.json
+2026-10-12 OMITTED  gamescope/.vscode/tasks.json
+2026-10-12 OMITTED  gamescope/tools/build_and_install_on_steamos_device_local.sh
+2026-10-12 OMITTED  gamescope/tools/build_and_install_on_steamos_device_remote.sh
+2026-10-12 OMITTED  gamescope/tools/build_on_steamos_device_local.sh
+2026-10-12 OMITTED  gamescope/tools/clean_steamos_device_remote.sh
+2026-10-12 OMITTED  gamescope/tools/copy_to_steamos_device_rsync.sh
+2026-10-12 OMITTED  gamescope/tools/reset_to_system_gamescope_local.sh
+2026-10-12 OMITTED  gamescope/tools/reset_to_system_gamescope_remote.sh
+2026-10-12 OMITTED  gamescope/tools/steamos_common_local.sh
+2026-10-12 OMITTED  gamescope/tools/steamos_common_remote.sh
+2026-10-12 OMITTED  gamescope/tools/steamos_password_helpers.sh
+2026-10-12 OMITTED  gamescope/tools/steamos_sessionctl_local.sh
+2026-10-12 OMITTED  gamescope/tools/steamos_sessionctl_remote.sh
+
+Root docs/scripts/tests/integration are new publication packaging prepared
+2026-10-12, licensed as recorded in LICENSE and NOTICE. Experimental
+patches are separately identified and never applied by default.

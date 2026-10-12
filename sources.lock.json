@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "project": "gamescope-tegra",
+  "upstream": {
+    "url": "https://github.com/ValveSoftware/gamescope.git",
+    "commit": "6867f509874f9bc52e12d6f4c4596cdf0d5be6b4"
+  },
+  "port_source_commit": "d0a5dbfde9210adf1ec8b42055a9388a10a5c7be",
+  "accepted_reference_elf_sha256": "b9f5847fe6378204126ba4beaa1b3c75b2b42831a4e1b91ebb3370d23723d3d8",
+  "reference_is_historical_not_new_build_acceptance": true,
+  "orientation": "180 degrees with accepted sx1 compensation",
+  "project_references_not_build_dependencies": [
+    {
+      "project": "theofficialgman/vk_layer_tegra_dc_present",
+      "url": "https://github.com/theofficialgman/vk_layer_tegra_dc_present",
+      "commit": "ecfb76aadbdc93cd7008e77bec944724cd70c364",
+      "role": "Tegra DC UAPI/direct presentation and adapted GOB conversion material"
+    },
+    {
+      "project": "SildurFX/Switchdeck",
+      "url": "https://github.com/SildurFX/Switchdeck",
+      "commit": "be0578fbf00c5a14a988a830f914f2c34cdaa1a1",
+      "role": "Broader Steam ARM64 and Proton/FEX/Box64/DXVK-Sarek/VKD3D integration reference; not bundled"
+    },
+    {
+      "project": "Switchroot Linux/L4T platform",
+      "url": "https://wiki.switchroot.org/wiki/linux",
+      "kernel_reference_url": "https://github.com/theofficialgman/switch-l4t-kernel-nvidia",
+      "kernel_reference_commit": "7d95822acda1f6dab3f3d1d099b43ff9e0d0e626",
+      "historical_kernel": "4.9.140-l4t #149",
+      "historical_bsp": "5.1.2-34+24.04",
+      "exact_running_kernel_source_commit": null,
+      "role": "Kernel/BSP/boot/hardware platform used on Switch; reference pin does not prove running build source; no kernel bundled"
+    }
+  ],
+  "host_wayland_scanner": {
+    "url": "https://gitlab.freedesktop.org/wayland/wayland.git",
+    "commit": "87cc8a8728a923fc57938faa81ba0e74f34ecdc7",
+    "version": "1.26.0"
+  },
+  "source_inputs": {
+    "src/Backends/tegra_l4t/eglstream/source/wayland-eglstream.xml": {
+      "url": "https://github.com/NVIDIA/egl-wayland",
+      "revision": "2a953fc86ca5707466ff28c117b0b72de87d9316",
+      "sha256": "e2f3594aff1a683e15f4290ce014ae0bc19261ea18e258b8138b8ff083750de4"
+    },
+    "src/Backends/tegra_l4t/eglstream/source/wayland-eglstream-controller.xml": {
+      "url": "https://github.com/NVIDIA/egl-wayland",
+      "revision": "2a953fc86ca5707466ff28c117b0b72de87d9316",
+      "sha256": "07012116ffcb426074acdb431fa32ab245cc02fd6aff27fb3ecf2dd73805dd66"
+    },
+    "src/wlserver.cpp": {
+      "revision": "834f9d372a21d34bcca77c5c7480c7703be46412",
+      "sha256": "6b52e841aaeb3a23ec62d8ce13e0953dfb6141d804c29c97b3d0fc9a43f5839c"
+    },
+    "src/Backends/tegra_l4t/tegra_l4t_eglstream.cpp": {
+      "revision": "0097b5837e1ac1b7f6056587025da4ec21ec4fa0",
+      "sha256": "619cbd03113cae6b2dfdcaf854dd7874eafe453f79eac0f85d18f31c89feb723"
+    },
+    "src/Utils/Version.cpp": {
+      "revision": "6867f509874f9bc52e12d6f4c4596cdf0d5be6b4",
+      "sha256": "073f8ceff1c1cd0178aceb75d8b08db95d6b82fbb943adb6057e1f6fcb2fe75e"
+    },
+    "src/Backends/tegra_l4t/tegra_l4t_presenter.cpp": {
+      "source": "accepted o180sx1 retained source",
+      "sha256": "94faa327b18d7b2a6b7928df871cb9d5edcd0c8271d135aaeecad60d5dc023fd"
+    },
+    "src/Backends/tegra_l4t/tegra_l4t_first_frame.cpp": {
+      "source": "accepted o180sx1 retained source",
+      "sha256": "64c12b85499ca49efb8a49db0e3433fa709f188dcee7ff748afe9925cdbfa446"
+    },
+    "src/Backends/tegra_l4t/gob_swizzle_sx1.comp": {
+      "source": "accepted o180sx1 retained source",
+      "sha256": "393360ed13071b443f640774455e75ea7f5684a593172bd33369edfdc098eba6"
+    },
+    "src/Backends/tegra_l4t/gob_swizzle_spv.h": {
+      "source": "accepted o180sx1 retained source",
+      "sha256": "1104ff4d565311f1ead2d972765261c5f38cb7568c0ca8b9f3f0f4b643c89732"
+    }
+  },
+  "repositories": [
+    {
+      "path": "src/reshade",
+      "url": "https://github.com/Joshua-Ashton/reshade",
+      "commit": "696b14cd6006ae9ca174e6164450619ace043283",
+      "optional": false
+    },
+    {
+      "path": "subprojects/libdisplay-info",
+      "url": "https://gitlab.freedesktop.org/emersion/libdisplay-info",
+      "commit": "c67a3e9bedb05ab61c7443704a1a107e76254595",
+      "optional": true
+    },
+    {
+      "path": "subprojects/libliftoff",
+      "url": "https://gitlab.freedesktop.org/emersion/libliftoff.git",
+      "commit": "8b08dc1c14fd019cc90ddabe34ad16596b0691f4",
+      "optional": false
+    },
+    {
+      "path": "subprojects/openvr",
+      "url": "https://github.com/ValveSoftware/openvr.git",
+      "commit": "ff87f683f41fe26cc9353dd9d9d7028357fd8e1a",
+      "optional": true
+    },
+    {
+      "path": "subprojects/vkroots",
+      "url": "https://github.com/Joshua-Ashton/vkroots",
+      "commit": "5106d8a0df95de66cc58dc1ea37e69c99afc9540",
+      "optional": false
+    },
+    {
+      "path": "subprojects/wlroots",
+      "url": "https://gitlab.freedesktop.org/wlroots/wlroots.git",
+      "commit": "d783533489e1f75d6886c2ab5c5960090ef268f8",
+      "optional": false
+    },
+    {
+      "path": "thirdparty/SPIRV-Headers",
+      "url": "https://github.com/KhronosGroup/SPIRV-Headers/",
+      "commit": "d790ced752b5bfc06b6988baadef6eb2d16bdf96",
+      "optional": false
+    },
+    {
+      "path": "subprojects/glm",
+      "url": "https://github.com/g-truc/glm.git",
+      "commit": "0af55ccecd98d4e5a8d1fad7de25ba429d60e863",
+      "meson_packagefiles": "glm"
+    },
+    {
+      "path": "subprojects/stb",
+      "url": "https://github.com/nothings/stb.git",
+      "commit": "5736b15f7ea0ffb08dd38af21067c314d6a3aae9",
+      "meson_packagefiles": "stb"
+    }
+  ],
+  "experimental_candidate_reference_sha256": "4b93ac3d60cc754cdec4e0aaf457fd21cb3176b0fbab820e48ae68abb047d43e"
+}

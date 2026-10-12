@@ -1,0 +1,31 @@
+gamescope-tegra license scope
+============================
+
+This source distribution contains components under several licenses.
+It is not a BSD-only distribution and it does not relicense upstream files.
+
+The combined Gamescope program with the Tegra implementation is distributed
+under GNU General Public License version 2. The complete text is in COPYING
+and LICENSES/GPL-2.0.txt. Individual Tegra files marked GPL-2.0-or-later retain
+their permission to use that file under version 2 or a later version.
+
+Original upstream Gamescope files retain their original licenses and notices.
+The complete upstream Gamescope license, including the OpenColorIO and ReShade
+notices, is preserved in gamescope/LICENSE and LICENSES/Gamescope.upstream.txt.
+Other third-party components retain their own licenses and copyright notices.
+For components explicitly offered under Apache-2.0 OR MIT, this distribution
+selects the MIT alternative. This choice does not apply to Apache-only files.
+
+Original project packaging scripts, tests, integration examples and documents
+outside gamescope/, where not derived from another component, are licensed
+under GPL-2.0-or-later: GNU GPL version 2 or, at your option, any later version.
+The full version 2 text is in COPYING. This matches the grant in gman's source
+notice; it does not grant broader rights over GPL-2.0-only third-party material.
+Modified/generated/upstream-derived
+material instead retains its source component's license. In particular the
+experimental EGLStream patch has the GPL scope of the Tegra code it modifies.
+
+See NOTICE.md, docs/LICENSING.md and docs/PROVENANCE.md for component scope,
+attribution, source origins and the boundaries of this source-only package.
+Proprietary runtime dependencies are not included or covered by this license.
+

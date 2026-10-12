@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bin -text
+*.sh text eol=lf
+*.py text eol=lf
+*.patch text eol=lf

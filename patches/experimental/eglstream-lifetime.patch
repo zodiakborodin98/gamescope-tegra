@@ -1,0 +1,685 @@
+--- a/src/Backends/tegra_l4t/tegra_l4t_eglstream.cpp
++++ b/src/Backends/tegra_l4t/tegra_l4t_eglstream.cpp
+@@ -61,10 +61,14 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstring>
++#include <ctime>
+ #include <deque>
++#include <memory>
+ #include <mutex>
+ #include <thread>
+ #include <unistd.h>
++#include <vector>
++#include <sys/eventfd.h>
+ 
+ #ifndef EGL_STREAM_BIT_KHR
+ #define EGL_STREAM_BIT_KHR 0x0400
+@@ -87,6 +91,20 @@
+         fflush( stderr );
+         va_end( args );
+     }
++
++    // M9L15 merged variant marker (greppable in the linked ELF).
++    static const char *s_M9L15Marker = "m9l15-egls-v1";
++
++    // M9L14/M9L15 instrumentation: shared clock for cross-process timelines.
++    static uint64_t Tl4tEsUs( clockid_t c )
++    {
++        timespec ts; clock_gettime( c, &ts );
++        return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)( ts.tv_nsec / 1000 );
++    }
++    static std::atomic<uint64_t> s_GenCounter{ 0 };
++#ifndef EGL_STREAM_STATE_KHR
++#define EGL_STREAM_STATE_KHR 0x3210
++#endif
+ 
+     // Fail-closed abort through the established hard-stop path: never fake a
+     // signal or silently degrade (decision 4).
+@@ -243,10 +261,21 @@
+     static std::thread              s_Thread;
+     static std::mutex               s_QMtx;
+     static std::condition_variable  s_QCv;
+-    static std::deque<struct SJob *> s_Queue;
++    struct SJob;
++    static std::deque<std::shared_ptr<struct SJob>> s_Queue;
+     static std::atomic<bool>        s_Quit{ false };
+     static std::atomic<bool>        s_Started{ false };
+     static std::atomic<bool>        s_EglOk{ false };
++
++    // M9L15: host-side finalization of retired generations. The consumer
++    // thread only performs GL/EGL teardown and marks the job complete; the
++    // record and transport slot are finalized on the owner (wlserver) thread
++    // via a bounded eventfd drain, in the same lock context the inline
++    // dispose used before (wayland event dispatch; no consumer locks taken).
++    static std::mutex               s_RetireMtx;
++    static std::vector<CEglStreamRecord *> s_RetirePending;
++    static int                      s_RetireFd = -1;
++    static struct wl_event_source  *s_RetireSource = nullptr;
+ 
+     static EGLDisplay               s_Dpy = EGL_NO_DISPLAY;
+     static EGLConfig                s_Cfg = nullptr;
+@@ -270,6 +299,7 @@
+         TegraL4TSlotImportInfo slot{};
+         bool     ok = false;
+         bool     done = false;
++        bool     detach = false;   // M9L15: teardown -> host finalize on owner path
+         std::mutex m;
+         std::condition_variable cv;
+     };
+@@ -290,8 +320,14 @@
+ 
+         bool     attached = false;
+         bool     connected = false;
+-        bool     destroyed = false;
+-        uint64_t commit_serial = 0;
++        std::atomic<bool> destroyed{ false };        // M9L15: cross-thread flag
++        std::atomic<uint64_t> commit_serial{ 0 };    // M9L15: cross-thread counter
++
++        // M9L15 ownership/retirement flags (wlserver / steamcompmgr / consumer)
++        std::atomic<bool> quarantined{ false };      // a FRAME failed/timed out: no new work
++        std::atomic<bool> retiring{ false };         // buffer destroy started: guard submissions
++        std::atomic<bool> destroy_started{ false };  // one-shot dispose guard
++        std::atomic<int>  owner_pins{ 0 };           // real copy/ack in progress (owner side)
+ 
+         CTegraL4TExportedSlot *slot = nullptr;
+ 
+@@ -300,22 +336,53 @@
+         GLuint tex = 0, fbo = 0, rbo = 0, mobj = 0, extbuf = 0, tfbuf = 0;
+         GLuint sReady = 0, sReturned = 0;
+         uint64_t frames_written = 0;
++        uint64_t gen = 0;                          // M9L14: generation identity
++        std::atomic<bool> frame_inflight{ false }; // M9L14: acquired w/o confirmed release
++        uint64_t last_acquire_us = 0, last_release_us = 0;
+     };
+ 
+     static void EglStreamBufferDestroyImpl( ::wlr_buffer *pBuf );
+     static const ::wlr_buffer_impl s_EglStreamBufferImpl = { .destroy = EglStreamBufferDestroyImpl };
+ 
+-    static bool SubmitJobSync( SJob &j, int nTimeoutMs )
+-    {
++    // M9L15: jobs are owned by the queue (shared_ptr). A submitter that times
++    // out drops its reference; the worker completes the still-alive job. No
++    // queue entry ever points at a caller stack object, and the retirement
++    // guard is checked and the job pushed under the same queue lock, so no
++    // FRAME/CONSUME job can be enqueued after the generation's TEARDOWN job.
++    enum ESubmitResult { SUBMITTED_DONE, SUBMITTED_TIMEOUT, SUBMIT_REFUSED };
++
++    static ESubmitResult SubmitJobSync( const std::shared_ptr<SJob> &pJob, int nTimeoutMs )
++    {
++        uint64_t tWait0 = Tl4tEsUs( CLOCK_MONOTONIC );
+         {
+             std::lock_guard<std::mutex> lk( s_QMtx );
+-            s_Queue.push_back( &j );
++            if ( pJob->kind != SJob::TEARDOWN && pJob->rec != nullptr && pJob->rec->retiring.load() )
++                return SUBMIT_REFUSED;
++            s_Queue.push_back( pJob );
+         }
+         s_QCv.notify_one();
+-        std::unique_lock<std::mutex> lk( j.m );
+-        if ( !j.cv.wait_for( lk, std::chrono::milliseconds( nTimeoutMs ), [&]{ return j.done; } ) )
+-            return false;
+-        return true;
++        std::unique_lock<std::mutex> lk( pJob->m );
++        bool bDone = pJob->cv.wait_for( lk, std::chrono::milliseconds( nTimeoutMs ), [&]{ return pJob->done; } );
++        uint64_t uWaitedMs = ( Tl4tEsUs( CLOCK_MONOTONIC ) - tWait0 ) / 1000ull;
++        if ( !bDone || uWaitedMs >= 1000ull )
++            tl4t_es_log( "job-wait: kind=%d timeout_ms=%d waited_ms=%llu done=%d gen=%llu t_mono_us=%llu",
++                         (int)pJob->kind, nTimeoutMs, (unsigned long long)uWaitedMs, (int)bDone,
++                         pJob->rec ? (unsigned long long)pJob->rec->gen : 0ull,
++                         (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++        return bDone ? SUBMITTED_DONE : SUBMITTED_TIMEOUT;
++    }
++
++    static void SubmitJobTeardown( CEglStreamRecord *rec )
++    {
++        auto pJob = std::make_shared<SJob>();
++        pJob->kind = SJob::TEARDOWN;
++        pJob->rec = rec;
++        pJob->detach = true;
++        {
++            std::lock_guard<std::mutex> lk( s_QMtx );
++            s_Queue.push_back( pJob );   // TEARDOWN bypasses the retirement guard
++        }
++        s_QCv.notify_one();
+     }
+ 
+     // ---------------------------------------------------------- external texture
+@@ -476,7 +543,7 @@
+         TL4T_EPF( ConsumerRelease, "eglStreamConsumerReleaseKHR" );
+ #undef TL4T_EPF
+         return s_E.CreateStreamFromFd && s_E.DestroyStream && s_E.ConsumerGLTextureExternal &&
+-               s_E.ConsumerAcquire && s_E.ConsumerRelease;
++               s_E.ConsumerAcquire && s_E.ConsumerRelease && s_E.StreamAttrib;
+     }
+ 
+     // Consumer EGLDisplay/context on the dedicated thread. Standalone: EGL_NO_CONTEXT
+@@ -624,12 +691,19 @@
+         // eglCreateStreamFromFileDescriptorKHR consumes a dup; we own fd here.
+         rec->stream = s_E.CreateStreamFromFd( s_Dpy, (EGLNativeFileDescriptorKHR)fd );
+         if ( rec->stream == EGL_NO_STREAM_KHR )
+-        { tl4t_es_log( "eglCreateStreamFromFileDescriptorKHR failed (0x%04x)", (unsigned)eglGetError() ); return false; }
+-
+-        // 2 s acquire bound (decision 8): never stall the compositor.
+-        if ( s_E.StreamAttrib )
+-            s_E.StreamAttrib( s_Dpy, rec->stream, EGL_CONSUMER_ACQUIRE_TIMEOUT_USEC_KHR, s_AcquireTimeoutMs * 1000 );
++        { tl4t_es_log( "eglCreateStreamFromFileDescriptorKHR failed (0x%04x) gen=%llu fd=%d t_mono_us=%llu",
++                       (unsigned)eglGetError(), (unsigned long long)rec->gen, fd,
++                       (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) ); return false; }
++
++        // 2 s acquire bound (decision 8): never stall the compositor. The bound is
++        // MANDATORY: without it a stale generation could block the worker forever.
+         (void)eglGetError();
++        if ( s_E.StreamAttrib == nullptr )
++        { tl4t_es_log( "eglStreamAttribKHR missing; acquire bound cannot be guaranteed gen=%llu",
++                       (unsigned long long)rec->gen ); return false; }
++        if ( !s_E.StreamAttrib( s_Dpy, rec->stream, EGL_CONSUMER_ACQUIRE_TIMEOUT_USEC_KHR, s_AcquireTimeoutMs * 1000 ) )
++        { tl4t_es_log( "eglStreamAttribKHR(acquire timeout) failed (0x%04x) gen=%llu",
++                       (unsigned)eglGetError(), (unsigned long long)rec->gen ); return false; }
+ 
+         s_G.GenTextures( 1, &rec->tex );
+         s_G.BindTexture( GL_TEXTURE_EXTERNAL_OES, rec->tex );
+@@ -668,6 +742,9 @@
+     // `ready`. No CPU readback: transform feedback writes the GPU buffer directly.
+     static bool GlConsumeFrame( CEglStreamRecord *rec )
+     {
++        if ( rec->quarantined.load() )
++        { tl4t_es_log( "consume: generation quarantined; frame skipped gen=%llu",
++                       (unsigned long long)rec->gen ); return false; }
+         if ( rec->stream == EGL_NO_STREAM_KHR || rec->slot == nullptr )
+         { tl4t_es_log( "consume: no stream/slot" ); return false; }
+ 
+@@ -680,7 +757,12 @@
+ 
+         (void)eglGetError();
+         if ( !s_E.ConsumerAcquire( s_Dpy, rec->stream ) )
+-        { tl4t_es_log( "eglStreamConsumerAcquireKHR failed/timeout within %dms", s_AcquireTimeoutMs ); return false; }
++        { tl4t_es_log( "eglStreamConsumerAcquireKHR failed/timeout within %dms gen=%llu seq=%llu t_mono_us=%llu",
++                       s_AcquireTimeoutMs, (unsigned long long)rec->gen,
++                       (unsigned long long)rec->commit_serial.load(),
++                       (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) ); return false; }
++        rec->frame_inflight.store( true );
++        rec->last_acquire_us = Tl4tEsUs( CLOCK_MONOTONIC );
+ 
+         const uint32_t w = rec->width, h = rec->height;
+         s_G.UseProgram( s_Prog );
+@@ -700,17 +782,36 @@
+         s_G.Disable( GL_RASTERIZER_DISCARD );
+         s_G.BindFramebuffer( GL_FRAMEBUFFER, 0 );
+         if ( !GlCheckNoError( "transform feedback capture" ) )
+-        { s_E.ConsumerRelease( s_Dpy, rec->stream ); return false; }
++        { if ( s_E.ConsumerRelease( s_Dpy, rec->stream ) ) rec->frame_inflight.store( false );
++          return false; }
+ 
+         s_G.BindBuffer( GL_COPY_READ_BUFFER, rec->tfbuf );
+         s_G.BindBuffer( GL_COPY_WRITE_BUFFER, rec->extbuf );
+         s_G.CopyBufferSubData( GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, (GLsizeiptr)( (uint64_t)w * h * 4 ) );
+         if ( !GlCheckNoError( "glCopyBufferSubData(tf->slot)" ) )
+-        { s_E.ConsumerRelease( s_Dpy, rec->stream ); return false; }
++        { if ( s_E.ConsumerRelease( s_Dpy, rec->stream ) ) rec->frame_inflight.store( false );
++          return false; }
+ 
+         (void)eglGetError();
+         if ( !s_E.ConsumerRelease( s_Dpy, rec->stream ) )
+-        { tl4t_es_log( "eglStreamConsumerReleaseKHR failed (0x%04x)", (unsigned)eglGetError() ); return false; }
++        {
++            EGLint eglsErr = eglGetError();
++            EGLint eglsState = -1, eglsQErr = 0; EGLBoolean eglsQ = EGL_FALSE;
++            if ( s_E.QueryStream != nullptr )
++            { (void)eglGetError();
++              eglsQ = s_E.QueryStream( s_Dpy, rec->stream, EGL_STREAM_STATE_KHR, &eglsState );
++              eglsQErr = eglGetError(); }
++            tl4t_es_log( "eglStreamConsumerReleaseKHR failed (0x%04x) gen=%llu seq=%llu "
++                         "stream_state=%d query_ok=%d query_err=0x%04x acquire_t=%llu t_mono_us=%llu",
++                         (unsigned)eglsErr, (unsigned long long)rec->gen,
++                         (unsigned long long)rec->commit_serial.load(),
++                         (int)eglsState, (int)eglsQ, (unsigned)eglsQErr,
++                         (unsigned long long)rec->last_acquire_us,
++                         (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++            return false;
++        }
++        rec->frame_inflight.store( false );
++        rec->last_release_us = Tl4tEsUs( CLOCK_MONOTONIC );
+ 
+         s_G.SignalSemaphoreEXT( rec->sReady, 1, &rec->extbuf, 0, nullptr, nullptr );
+         if ( !GlCheckNoError( "glSignalSemaphoreEXT(ready)" ) ) return false;
+@@ -752,8 +853,86 @@
+         if ( rec->rbo ) { s_G.DeleteRenderbuffers( 1, &rec->rbo ); rec->rbo = 0; }
+         if ( rec->tex ) { s_G.DeleteTextures( 1, &rec->tex ); rec->tex = 0; }
+         if ( rec->stream != EGL_NO_STREAM_KHR )
+-        { s_E.DestroyStream( s_Dpy, rec->stream ); rec->stream = EGL_NO_STREAM_KHR; }
+-    }
++        {
++            (void)eglGetError();
++            EGLBoolean eglsDestroyed = s_E.DestroyStream( s_Dpy, rec->stream );
++            if ( !eglsDestroyed )
++                tl4t_es_log( "eglDestroyStreamKHR failed (0x%04x) gen=%llu inflight=%d t_mono_us=%llu",
++                             (unsigned)eglGetError(), (unsigned long long)rec->gen,
++                             rec->frame_inflight.load() ? 1 : 0,
++                             (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++            rec->stream = EGL_NO_STREAM_KHR;
++        }
++        tl4t_es_log( "teardown: gen=%llu inflight=%d t_mono_us=%llu",
++                     (unsigned long long)rec->gen, rec->frame_inflight.load() ? 1 : 0,
++                     (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++    }
++
++    // ------------------------------------------------ M9L15 host-side finalization
++    // Lock order: worker/owner take s_QMtx (queue) or s_RetireMtx (retire list),
++    // never both nested, and never waylock; the drain runs on the wlserver
++    // thread inside the wayland lock (same context as the previous inline
++    // dispose). owner_pins guards real copy/ack work: the transport slot is not
++    // freed while a FetchSlotToTexture / discard release sequence is running.
++    static void FinalizeRecord( CEglStreamRecord *rec )
++    {
++        tl4t_es_log( "finalize: gen=%llu slot=%p t_mono_us=%llu",
++                     (unsigned long long)rec->gen, (void *)rec->slot,
++                     (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++        if ( rec->slot != nullptr ) { TegraL4TFreeExportedSlot( rec->slot ); rec->slot = nullptr; }
++        if ( rec->stream_fd >= 0 ) { close( rec->stream_fd ); rec->stream_fd = -1; }
++        wlr_buffer_finish( &rec->base );
++        delete rec;
++    }
++
++    static void RetireDrainNow()
++    {
++        std::vector<CEglStreamRecord *> todo;
++        {
++            std::lock_guard<std::mutex> lk( s_RetireMtx );
++            todo.swap( s_RetirePending );
++        }
++        for ( CEglStreamRecord *rec : todo )
++        {
++            if ( rec->owner_pins.load() != 0 )
++            {
++                // A real copy/ack is in flight on the owner side; keep it
++                // pending (the unpin path re-signals the watcher).
++                std::lock_guard<std::mutex> lk( s_RetireMtx );
++                s_RetirePending.push_back( rec );
++                continue;
++            }
++            FinalizeRecord( rec );
++        }
++    }
++
++    static int RetireDrainCallback( int fd, uint32_t, void * )
++    {
++        uint64_t uVal = 0;
++        while ( read( fd, &uVal, sizeof( uVal ) ) == (ssize_t)sizeof( uVal ) ) {}
++        RetireDrainNow();
++        return 0;
++    }
++
++    static void RetireSignal()
++    {
++        if ( s_RetireFd >= 0 )
++        {
++            uint64_t uOne = 1;
++            ssize_t n = write( s_RetireFd, &uOne, sizeof( uOne ) );
++            (void)n;
++        }
++    }
++
++    // M9L15: RAII pin for the whole owner-side commit sequence (submit ->
++    // copy/ack -> release). Host finalize waits for pins==0, so the transport
++    // slot cannot be freed between job completion and FetchSlotToTexture.
++    struct CRecOwnerPin
++    {
++        CEglStreamRecord *rec;
++        explicit CRecOwnerPin( CEglStreamRecord *r ) : rec( r ) { rec->owner_pins.fetch_add( 1 ); }
++        ~CRecOwnerPin() { if ( rec->owner_pins.fetch_sub( 1 ) == 1 ) RetireSignal(); }
++    };
+ 
+     // -------------------------------------------------------------- consumer loop
+     static void ConsumerThreadMain()
+@@ -764,14 +943,15 @@
+ 
+         for (;;)
+         {
+-            SJob *j = nullptr;
++            std::shared_ptr<SJob> pJob;
+             {
+                 std::unique_lock<std::mutex> lk( s_QMtx );
+                 s_QCv.wait( lk, []{ return s_Quit || !s_Queue.empty(); } );
+                 if ( s_Queue.empty() ) { if ( s_Quit ) break; continue; }
+-                j = s_Queue.front(); s_Queue.pop_front();
++                pJob = s_Queue.front(); s_Queue.pop_front();
+             }
+-            if ( j == nullptr ) continue;
++            if ( pJob == nullptr ) continue;
++            SJob *j = pJob.get();
+ 
+             bool ok = false;
+             switch ( j->kind )
+@@ -782,13 +962,34 @@
+                 if ( j->fd >= 0 ) { close( j->fd ); j->fd = -1; }
+                 break;
+             case SJob::FRAME:
++                if ( j->rec != nullptr && j->rec->quarantined.load() )
++                { tl4t_es_log( "consume: generation quarantined; frame skipped (bounded) gen=%llu",
++                               (unsigned long long)j->rec->gen ); ok = false; break; }
+                 ok = s_EglOk && j->rec != nullptr && GlConsumeFrame( j->rec );
++                if ( !ok && j->rec != nullptr ) j->rec->quarantined.store( true );
+                 break;
+             case SJob::CONSUME:
++                if ( j->rec != nullptr && j->rec->quarantined.load() )
++                { ok = false; break; }
+                 ok = s_EglOk && j->rec != nullptr && GlConsumeDiscard( j->rec );
++                if ( !ok && j->rec != nullptr ) j->rec->quarantined.store( true );
+                 break;
+             case SJob::TEARDOWN:
+                 if ( j->rec != nullptr ) GlDestroyRecord( j->rec );
++                if ( j->detach && j->rec != nullptr )
++                {
++                    // M9L15: consumer-side teardown done; the record is handed
++                    // to the owner thread for finalization (slot free,
++                    // wlr_buffer_finish, delete) after this point.
++                    CEglStreamRecord *rec = j->rec;
++                    {
++                        std::lock_guard<std::mutex> lk( s_RetireMtx );
++                        s_RetirePending.push_back( rec );
++                    }
++                    if ( s_RetireFd >= 0 )
++                    { uint64_t uOne = 1; ssize_t n = write( s_RetireFd, &uOne, sizeof( uOne ) ); (void)n; }
++                    j->rec = nullptr;
++                }
+                 ok = true;
+                 break;
+             }
+@@ -864,15 +1065,31 @@
+         { wl_list_remove( &rec->surface_destroy_listener.link );
+           rec->surface_destroy_listener_added = nullptr; }
+ 
++        if ( rec->destroy_started.exchange( true ) )
++        { tl4t_es_log( "dispose: duplicate destroy ignored gen=%llu", (unsigned long long)rec->gen ); return; }
++        uint64_t uGen = rec->gen;   // copy before any handoff (the worker may outlive this path)
++        tl4t_es_log( "dispose: gen=%llu connected=%d frame_inflight=%d slot=%p t_mono_us=%llu",
++                     (unsigned long long)uGen, rec->connected ? 1 : 0,
++                     rec->frame_inflight.load() ? 1 : 0, (void *)rec->slot,
++                     (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++
++        rec->retiring.store( true );
++        RetireDrainNow();   // opportunistic drain on the owner path
++
+         if ( rec->connected )
+         {
+-            SJob j; j.kind = SJob::TEARDOWN; j.rec = rec;
+-            SubmitJobSync( j, 5000 );
+-        }
+-        if ( rec->slot != nullptr ) { TegraL4TFreeExportedSlot( rec->slot ); rec->slot = nullptr; }
+-        if ( rec->stream_fd >= 0 ) { close( rec->stream_fd ); rec->stream_fd = -1; }
+-        wlr_buffer_finish( &rec->base );
+-        delete rec;
++            // M9L15: consumer teardown on the consumer owner thread; the record
++            // is finalized on this (host) path only after the teardown job is
++            // confirmed complete. Nothing is freed because a caller stopped
++            // waiting; the transport slot is not freed under an in-flight copy.
++            SubmitJobTeardown( rec );
++            tl4t_es_log( "dispose: gen=%llu retired; host finalize after consumer teardown",
++                         (unsigned long long)uGen );
++            return;
++        }
++
++        // Never connected: no consumer-side objects; finalize on this path.
++        FinalizeRecord( rec );
+     }
+ 
+     // ------------------------------------------------------------ surface teardown
+@@ -932,8 +1149,12 @@
+         rec->buf_res = pBuf;
+         wl_resource_set_implementation( pBuf, &s_EglStreamWlBufferImpl, rec, EglStreamBufferResourceDestroy );
+ 
+-        tl4t_es_log( "create_stream: wl_buffer id=%u %dx%d fd=%d flip=%d",
+-                     uId, nWidth, nHeight, nHandle, rec->flipY );
++        rec->gen = ++s_GenCounter;
++        pid_t eglsCpid = -1; uid_t eglsCuid = 0; gid_t eglsCgid = 0;
++        wl_client_get_credentials( pClient, &eglsCpid, &eglsCuid, &eglsCgid );
++        tl4t_es_log( "create_stream: gen=%llu wl_buffer id=%u client_pid=%d %dx%d fd=%d flip=%d t_mono_us=%llu t_real_us=%llu",
++                     (unsigned long long)rec->gen, uId, (int)eglsCpid, nWidth, nHeight, nHandle, rec->flipY,
++                     (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ), (unsigned long long)Tl4tEsUs( CLOCK_REALTIME ) );
+     }
+ 
+     static void DisplaySwapInterval( ::wl_client *, ::wl_resource *, ::wl_resource *pStream, int32_t nInterval )
+@@ -976,13 +1197,27 @@
+ 
+         // §3: the connect MUST have completed before this handler returns.
+         int fd = rec->stream_fd; rec->stream_fd = -1;
+-        SJob j; j.kind = SJob::CONNECT; j.rec = rec; j.fd = fd;
+-        j.width = rec->width; j.height = rec->height; j.flipY = rec->flipY; j.slot = info;
+-        if ( !SubmitJobSync( j, 5000 ) )
++        auto pConn = std::make_shared<SJob>();
++        pConn->kind = SJob::CONNECT; pConn->rec = rec; pConn->fd = fd;
++        pConn->width = rec->width; pConn->height = rec->height; pConn->flipY = rec->flipY; pConn->slot = info;
++        ESubmitResult eConn = SubmitJobSync( pConn, 5000 );
++        if ( eConn == SUBMIT_REFUSED )
+         { if ( fd >= 0 ) close( fd );
+-          tl4t_es_fail_closed( "consumer connect timed out" ); }
+-        if ( !j.ok )
+-        { tl4t_es_fail_closed( "eglStreamConsumerGLTextureExternalKHR connect failed" ); }
++          tl4t_es_log( "attach: refused (generation retiring) gen=%llu",
++                       (unsigned long long)rec->gen ); return; }
++        if ( eConn == SUBMITTED_TIMEOUT )
++        {   // the job owns the fd now; fail closed without racing its close
++            tl4t_es_log( "attach: connect timeout gen=%llu surface_id=%u t_mono_us=%llu",
++                         (unsigned long long)rec->gen,
++                         pSurface != nullptr ? wl_resource_get_id( pSurface ) : 0u,
++                         (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++            tl4t_es_fail_closed( "consumer connect timed out" ); }
++        if ( !pConn->ok )
++        { tl4t_es_log( "attach: connect failed gen=%llu surface_id=%u t_mono_us=%llu",
++                       (unsigned long long)rec->gen,
++                       pSurface != nullptr ? wl_resource_get_id( pSurface ) : 0u,
++                       (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++          tl4t_es_fail_closed( "eglStreamConsumerGLTextureExternalKHR connect failed" ); }
+ 
+         rec->connected = true;
+         if ( pSurface != nullptr && rec->surface_destroy_listener_added != pSurface )
+@@ -992,7 +1227,17 @@
+             rec->surface_destroy_listener_added = pSurface;
+         }
+ 
+-        tl4t_es_log( "attach: connected stream %ux%d (per-generation slot ready)", rec->width, rec->height );
++        {
++            ::wl_client *pClientAttach = pSurface != nullptr ? wl_resource_get_client( pSurface ) : nullptr;
++            pid_t eglsAPid = -1; uid_t eglsAUid = 0; gid_t eglsAGid = 0;
++            if ( pClientAttach != nullptr )
++                wl_client_get_credentials( pClientAttach, &eglsAPid, &eglsAUid, &eglsAGid );
++            tl4t_es_log( "attach: connected gen=%llu stream %ux%d surface_id=%u buffer_id=%u client_pid=%d t_mono_us=%llu",
++                         (unsigned long long)rec->gen, rec->width, rec->height,
++                         pSurface != nullptr ? wl_resource_get_id( pSurface ) : 0u,
++                         rec->buf_res != nullptr ? wl_resource_get_id( rec->buf_res ) : 0u,
++                         (int)eglsAPid, (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++        }
+     }
+ 
+     static void ControllerAttachAttribs( ::wl_client *c, ::wl_resource *r, ::wl_resource *pSurface,
+@@ -1023,7 +1268,35 @@
+         wl_global_create( pDisplay, &wl_eglstream_display_interface, 1, nullptr, DisplayBind );
+         wl_global_create( pDisplay, &wl_eglstream_controller_interface, 2, nullptr, ControllerBind );
+         StartConsumer();
+-        tl4t_es_log( "EGLStream consumer globals registered (display v1 + controller v2)" );
++
++        // M9L15: bounded owner-side finalization watcher. The eventfd is drained
++        // on the wlserver event loop (wayland lock held) — the same context the
++        // previous inline dispose ran in; the consumer thread never finalizes.
++        s_RetireFd = eventfd( 0, EFD_CLOEXEC | EFD_NONBLOCK );
++        if ( s_RetireFd >= 0 )
++        {
++            struct wl_event_loop *pLoop = wl_display_get_event_loop( pDisplay );
++            s_RetireSource = wl_event_loop_add_fd( pLoop, s_RetireFd, WL_EVENT_READABLE, RetireDrainCallback, nullptr );
++            if ( s_RetireSource == nullptr )
++            {
++                close( s_RetireFd ); s_RetireFd = -1;
++                tl4t_es_fail_closed( "retire watcher registration failed" );
++            }
++            tl4t_es_log( "retire watcher registered (%p); host finalize on the wlserver loop", (void *)s_RetireSource );
++        }
++        else
++            tl4t_es_fail_closed( "retire eventfd failed" );
++
++        tl4t_es_log( "EGLStream consumer globals registered (display v1 + controller v2) [%s lifetime-fix]", s_M9L15Marker );
++        return true;
++    }
++
++    bool TegraL4TEglStreamInfo( ::wlr_buffer *pBuffer, uint64_t *pGen, uint64_t *pSeq )
++    {
++        if ( !TegraL4TIsEglStreamBuffer( pBuffer ) ) return false;
++        CEglStreamRecord *rec = reinterpret_cast<CEglStreamRecord *>( pBuffer );
++        if ( pGen != nullptr ) *pGen = rec->gen;
++        if ( pSeq != nullptr ) *pSeq = rec->commit_serial.load();
+         return true;
+     }
+ 
+@@ -1037,34 +1310,70 @@
+         if ( !TegraL4TIsEglStreamBuffer( pBuffer ) )
+             return nullptr;
+         CEglStreamRecord *rec = reinterpret_cast<CEglStreamRecord *>( pBuffer );
+-        if ( rec->destroyed || !rec->connected || rec->slot == nullptr )
++        if ( rec->destroyed.load() || !rec->connected || rec->slot == nullptr )
+         {
+             tl4t_es_log( "commit: stream not connected; releasing buffer" );
+             EglStreamSendRelease( rec );
+             return nullptr;
+         }
+-
+-        rec->commit_serial++;
+-
+-        SJob j; j.kind = SJob::FRAME; j.rec = rec;
+-        if ( !SubmitJobSync( j, s_AcquireTimeoutMs + 3000 ) )
+-        { tl4t_es_log( "commit: consumer frame job timed out; fail closed for this frame" );
+-          EglStreamSendRelease( rec ); return nullptr; }
+-        if ( !j.ok )
+-        { tl4t_es_log( "commit: acquire/blit failed; releasing buffer" );
+-          EglStreamSendRelease( rec ); return nullptr; }
++        if ( rec->quarantined.load() )
++        {
++            tl4t_es_log( "commit: generation quarantined; releasing buffer gen=%llu",
++                         (unsigned long long)rec->gen );
++            EglStreamSendRelease( rec );
++            return nullptr;
++        }
++
++        rec->commit_serial.fetch_add( 1 );
++        uint64_t tPost = Tl4tEsUs( CLOCK_MONOTONIC );
++
++        // M9L15: pin the whole owner-side sequence before any submission so the
++        // transport slot survives until this commit's copy/ack completed.
++        CRecOwnerPin ownerPin( rec );
++
++        auto pFrame = std::make_shared<SJob>();
++        pFrame->kind = SJob::FRAME; pFrame->rec = rec;
++        ESubmitResult eRes = SubmitJobSync( pFrame, s_AcquireTimeoutMs + 3000 );
++        if ( eRes == SUBMIT_REFUSED )
++        {
++            tl4t_es_log( "commit: refused (generation retiring); releasing buffer gen=%llu",
++                         (unsigned long long)rec->gen );
++            EglStreamSendRelease( rec ); return nullptr;
++        }
++        if ( eRes == SUBMITTED_TIMEOUT )
++        {
++            rec->quarantined.store( true );
++            tl4t_es_log( "commit: consumer frame job timed out; generation quarantined "
++                         "gen=%llu seq=%llu t_post_us=%llu t_mono_us=%llu",
++                         (unsigned long long)rec->gen, (unsigned long long)rec->commit_serial.load(),
++                         (unsigned long long)tPost, (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++            EglStreamSendRelease( rec ); return nullptr;
++        }
++        if ( !pFrame->ok )
++        {
++            rec->quarantined.store( true );
++            tl4t_es_log( "commit: acquire/blit failed; generation quarantined "
++                         "gen=%llu seq=%llu t_post_us=%llu t_done_us=%llu",
++                         (unsigned long long)rec->gen, (unsigned long long)rec->commit_serial.load(),
++                         (unsigned long long)tPost, (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
++            EglStreamSendRelease( rec ); return nullptr;
++        }
+ 
+         // Accepted buffer->image body, unchanged, on this (compositor) thread.
++        // The owner pin (taken before submission) covers this copy/ack and the
++        // wl_buffer.release below; host finalize cannot free the slot meanwhile.
+         OwningRc<CVulkanTexture> pTex = TegraL4TFetchSlotToTexture( rec->slot );
+ 
+         // GPU copy complete and wl_buffer.release may now be sent (Wayland lifetime
+         // only; never while holding a GPU wait).
+         EglStreamSendRelease( rec );
+ 
+-        if ( rec->commit_serial <= 3 || ( rec->commit_serial % 4 ) == 0 )
+-            tl4t_es_log( "commit %llu: %dx%d -> %s",
+-                         (unsigned long long)rec->commit_serial, rec->width, rec->height,
+-                         pTex ? "texture" : "discard" );
++        if ( rec->commit_serial.load() <= 3 || ( rec->commit_serial.load() % 64 ) == 0 )
++            tl4t_es_log( "commit %llu: %dx%d -> %s gen=%llu waited_us=%llu t_mono_us=%llu",
++                         (unsigned long long)rec->commit_serial.load(), rec->width, rec->height,
++                         pTex ? "texture" : "discard", (unsigned long long)rec->gen,
++                         (unsigned long long)( Tl4tEsUs( CLOCK_MONOTONIC ) - tPost ),
++                         (unsigned long long)Tl4tEsUs( CLOCK_MONOTONIC ) );
+         return pTex;
+     }
+ 
+@@ -1076,13 +1385,28 @@
+         if ( rec->destroyed )
+             return;
+ 
+-        if ( rec->connected && rec->slot != nullptr )
++        // M9L15: owner pin covers the whole discard sequence (consume job +
++        // release), so finalize cannot free the slot while it runs.
++        CRecOwnerPin ownerPin( rec );
++
++        if ( rec->connected && rec->slot != nullptr && !rec->retiring.load() && !rec->quarantined.load() )
+         {
+             // Consume + release the EGLStream frame (never a silent drop).
+-            SJob j; j.kind = SJob::CONSUME; j.rec = rec;
+-            SubmitJobSync( j, s_AcquireTimeoutMs + 1500 );
+-        }
++            auto pDiscard = std::make_shared<SJob>();
++            pDiscard->kind = SJob::CONSUME; pDiscard->rec = rec;
++            ESubmitResult eRes = SubmitJobSync( pDiscard, s_AcquireTimeoutMs + 1500 );
++            if ( eRes == SUBMIT_REFUSED )
++                tl4t_es_log( "discard refused (generation retiring) gen=%llu", (unsigned long long)rec->gen );
++            else if ( eRes != SUBMITTED_DONE || !pDiscard->ok )
++            {
++                rec->quarantined.store( true );
++                tl4t_es_log( "discard consume failed/timeout (generation quarantined) gen=%llu res=%d ok=%d",
++                             (unsigned long long)rec->gen, (int)eRes, pDiscard->ok ? 1 : 0 );
++            }
++        }
++        else if ( rec->retiring.load() || rec->quarantined.load() )
++            tl4t_es_log( "discard skipped (retiring/quarantined) gen=%llu", (unsigned long long)rec->gen );
+         EglStreamSendRelease( rec );
+-        tl4t_es_log( "discard commit (%s)", pReason ? pReason : "?" );
++        tl4t_es_log( "discard commit (%s) gen=%llu", pReason ? pReason : "?", (unsigned long long)rec->gen );
+     }
+ }
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -1860,6 +1860,19 @@
+ 		// buffer memo is not used; each commit is one fresh generation.
+ 		gamescope::OwningRc<CVulkanTexture> pEglStream =
+ 			gamescope::TegraL4TCreateTextureFromEglStreamBuffer( buf );
++		{
++			// M9L15 instrumentation (log-only): name the record (gen) and the window
++			// (XID + surface id) for the committed EGLStream buffer; bounded
++			// (first 3 and every 64th).
++			uint64_t uEglsGen = 0, uEglsSeq = 0;
++			if ( gamescope::TegraL4TEglStreamInfo( buf, &uEglsGen, &uEglsSeq ) &&
++			     ( uEglsSeq <= 3 || ( uEglsSeq % 64 ) == 0 ) )
++				xwm_log.infof( "egls commit gen=%llu seq=%llu win=%lx surf_id=%u surf=%p",
++					(unsigned long long)uEglsGen, (unsigned long long)uEglsSeq,
++					w->type == steamcompmgr_win_type_t::XWAYLAND ? (unsigned long)w->xwayland().id : 0UL,
++					surf != nullptr && surf->resource != nullptr ? wl_resource_get_id( surf->resource ) : 0u,
++					(void *)surf );
++		}
+ 		if ( pEglStream == nullptr )
+ 			return nullptr;
+ 		commit->vulkanTex = pEglStream;
+@@ -6481,6 +6494,10 @@
+ 
+ 	current_surface = w->xwayland().surface.current_surface();
+ 	main_surface = w->xwayland().surface.main_surface;
++	// M9L15 instrumentation (log-only): map the X11 window to the wl_surface id
++	// before any commit, so a stream that fails at CONNECT can still be named.
++	if ( gamescope::IsTegraL4TMode() && surfaceID != 0 )
++		xwm_log.infof( "egls-map win=%lx wl_surface_id=%u", (unsigned long)w->xwayland().id, surfaceID );
+ 	if ( current_surface == NULL )
+ 	{
+ 		wlserver_unlock();

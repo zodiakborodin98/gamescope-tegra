@@ -1,0 +1,49 @@
+diff --git a/hw/xwayland/xwayland-output.c b/hw/xwayland/xwayland-output.c
+index cf99c6e84..46ec27d69 100644
+--- a/hw/xwayland/xwayland-output.c
++++ b/hw/xwayland/xwayland-output.c
+@@ -25,6 +25,8 @@
+ 
+ #include <xwayland-config.h>
+ 
++#include <stdio.h>
++#include <stdlib.h>
+ #include <randrstr.h>
+ #include <X11/Xatom.h>
+ 
+@@ -114,6 +116,35 @@ output_handle_mode(void *data, struct wl_output *wl_output, uint32_t flags,
+     if (!(flags & WL_OUTPUT_MODE_CURRENT))
+         return;
+ 
++    /* M8t (SteamOS-Switch): optional override of the output size Xwayland
++     * believes the compositor has.  The compositor can expose a large game
++     * mode (e.g. 1280x720) on the real wl_output, while the X11/Steam UI
++     * must stay small (e.g. 426x240) for performance.  Set
++     * XWL_SCREEN_SIZE_OVERRIDE=WxH in the Xwayland environment to enable;
++     * unset keeps the previous behaviour (env parsed once).
++     */
++    {
++        static int override_w = -1, override_h = -1;
++        static Bool override_parsed = FALSE;
++
++        if (!override_parsed) {
++            const char *env;
++
++            override_parsed = TRUE;
++            env = getenv("XWL_SCREEN_SIZE_OVERRIDE");
++            if (env == NULL || sscanf(env, "%dx%d", &override_w, &override_h) != 2 ||
++                override_w <= 0 || override_h <= 0) {
++                override_w = -1;
++                override_h = -1;
++            }
++        }
++
++        if (override_w > 0) {
++            width = override_w;
++            height = override_h;
++        }
++    }
++
+     /* Apply the change from wl_output only if xdg-output is not supported */
+     if (!xwl_output->xdg_output) {
+         xwl_output->width = width;

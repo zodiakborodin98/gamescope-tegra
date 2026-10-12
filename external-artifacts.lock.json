@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "artifacts": {
+    "valve-arm64-runtime": {
+      "url": "https://repo.steampowered.com/steamrt3c/images/3c.0.20260824.257593/steam-runtime-steamrt-arm64.tar.xz",
+      "filename": "steam-runtime-steamrt-arm64.tar.xz",
+      "sha256": "2f2be461b6a4360828e200e1644e18cd957eedc36a38e5a1e13a39276320b6e2",
+      "size": 52436064,
+      "checksum_source_url": "https://repo.steampowered.com/steamrt3c/images/3c.0.20260824.257593/SHA256SUMS",
+      "allowed_hosts": ["repo.steampowered.com"],
+      "license_url": "https://github.com/ValveSoftware/steam-runtime",
+      "note": "Optional runtime, not the Steam ARM64 client and not a Gamescope build sysroot. Pin from the historical official SHA256SUMS. Availability is checked when requested."
+    },
+    "nvidia-l4t-t210-32.7.4": {
+      "url": "https://developer.nvidia.com/downloads/embedded/l4t/r32_release_v7.4/t210/jetson-210_linux_r32.7.4_aarch64.tbz2",
+      "filename": "jetson-210_linux_r32.7.4_aarch64.tbz2",
+      "sha256": null,
+      "allowed_hosts": ["developer.nvidia.com", "developer.download.nvidia.com"],
+      "license_url": "https://developer.download.nvidia.com/embedded/L4T/r32_Release_v7.4/T186/Tegra_Software_License_Agreement-Tegra-Linux.txt",
+      "note": "Official reference BSP. Independently verified SHA256 is not available in this package: caller must supply --sha256 from a trusted verification. Not a Switchroot installer or a validated replacement runtime."
+    },
+    "nvidia-l4t-t210-sources-32.7.4": {
+      "url": "https://developer.nvidia.com/downloads/embedded/l4t/r32_release_v7.4/sources/t210/public_sources.tbz2",
+      "filename": "public_sources.tbz2",
+      "sha256": null,
+      "allowed_hosts": ["developer.nvidia.com", "developer.download.nvidia.com"],
+      "license_url": "https://developer.nvidia.com/embedded/linux-tegra-r3274",
+      "note": "Official source archive; component licenses still apply. Requires a trusted --sha256 before download."
+    }
+  },
+  "steam_arm64_client": {
+    "status": "USER_SUPPLIED",
+    "reason": "No qualified official standalone ARM64 client pin in this source package. Third-party repacks are not used as official sources.",
+    "build_dependency": false
+  }
+}

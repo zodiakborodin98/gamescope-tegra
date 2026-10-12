@@ -1,0 +1,85 @@
+--- a/src/glx/drisw_glx.c
++++ b/src/glx/drisw_glx.c
+@@ -487,6 +487,8 @@
+    struct drisw_drawable *pdp;
+    __GLXDRIconfigPrivate *config = (__GLXDRIconfigPrivate *) modes;
+    unsigned depth;
++   unsigned geom_w = 0, geom_h = 0;
++   int config_vis_depth = -1;
+    struct drisw_screen *psc = (struct drisw_screen *) base;
+    Display *dpy = psc->base.dpy;
+ 
+@@ -494,8 +496,11 @@
+    xcb_generic_error_t *error;
+    xcb_get_geometry_cookie_t cookie = xcb_get_geometry(conn, xDrawable);
+    xcb_get_geometry_reply_t *reply = xcb_get_geometry_reply(conn, cookie, &error);
+-   if (reply)
++   if (reply) {
+       depth = reply->depth;
++      geom_w = reply->width;
++      geom_h = reply->height;
++   }
+    free(reply);
+    if (!reply || error)
+       return NULL;
+@@ -522,7 +527,17 @@
+                                &template, &matches);
+ 
+       if (visinfo && matches) {
+-         pdp->xDepth = visinfo->depth;
++         /* M7G depthfix2: use the ACTUAL drawable depth from the server
++          * geometry reply (validated above: NULL/error already returned).
++          * XShmCreateImage/XCreateImage below use pdp->xDepth; the server
++          * rejects the put with BadMatch when image depth != drawable depth.
++          * The byte layout/bpp/stride are unchanged (24 and 32 are both
++          * bpp-32 ZPixmap here) and the server interprets the bytes per the
++          * drawable's own visual; nothing is converted client-side.  The
++          * config visual depth is NOT used as the image depth anymore.
++          */
++         pdp->xDepth = depth;
++         config_vis_depth = visinfo->depth;
+          XFree(visinfo);
+       }
+    }
+@@ -544,6 +559,41 @@
+       return NULL;
+    }
+ 
++   /* M7GDEPTH1 diagnostic: one bounded metadata line per drawable, no wire
++    * changes and no behavior change.  Records the depth decision inputs and
++    * the XImage layout Xlib produces for pdp->xDepth, plus the config's
++    * display-target color format (the format the drisw buffer is rendered in;
++    * see dri_fill_st_visual()/dri_drawable_get_format()).
++    */
++   {
++      XImage *probe = XCreateImage(dpy, NULL, pdp->xDepth, ZPixmap, 0, NULL,
++                                   geom_w, geom_h, 32, 0);
++      const struct gl_config *mode =
++         config->driConfig ? &config->driConfig->modes : NULL;
++
++      fprintf(stderr,
++              "M7GDEPTH1 xid=0x%lx geom_depth=%u geom=%ux%u visid=0x%lx "
++              "vis_depth=%d xDepth=%d ximg=%d/%d/%d masks=%lu/%lu/%lu "
++              "bpl=%d dtfmt=%d bits=%d/%d/%d/%d\n",
++              (unsigned long) xDrawable, depth, geom_w, geom_h,
++              (unsigned long) config->base.visualID, config_vis_depth,
++              pdp->xDepth,
++              probe ? probe->depth : -1,
++              probe ? probe->bits_per_pixel : -1,
++              probe ? probe->byte_order : -1,
++              probe ? probe->red_mask : 0UL,
++              probe ? probe->green_mask : 0UL,
++              probe ? probe->blue_mask : 0UL,
++              probe ? probe->bytes_per_line : -1,
++              mode ? (int) mode->color_format : -1,
++              mode ? mode->redBits : -1,
++              mode ? mode->greenBits : -1,
++              mode ? mode->blueBits : -1,
++              mode ? mode->alphaBits : -1);
++      if (probe)
++         XDestroyImage(probe);
++   }
++
+    pdp->base.destroyDrawable = driswDestroyDrawable;
+ 
+    return &pdp->base;
