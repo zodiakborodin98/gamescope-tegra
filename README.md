@@ -1,5 +1,15 @@
 # Gamescope for Tegra X1 / Nintendo Switch
 
+> **Development status: not suitable for everyday use.**
+> This project is a research prototype, not a practical SteamOS gaming system at
+> this stage. Serious performance, stability and game compatibility limitations
+> remain. The sources are published for research and development.
+>
+> **Текущее состояние: проект непригоден для повседневного использования.**
+> Это исследовательский прототип. Существенные ограничения производительности,
+> стабильности и совместимости с играми делают практическое использование системы
+> крайне затруднительным. Исходники опубликованы для разработки и исследований.
+
 An **experimental source port**, based on Valve Gamescope, for the legacy
 NVIDIA Tegra X1 / L4T 32.7.4 stack used by this Switch Linux development setup.
 The historical baseline displayed Steam GamepadUI and native FEZ/Super Meat Boy
