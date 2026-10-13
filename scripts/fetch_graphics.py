@@ -39,6 +39,25 @@ def tree_hash(source):
     return result.hexdigest()
 
 
+def apply_locked_patches(dest, item):
+    dest = Path(dest).resolve()
+    patch_env = os.environ.copy()
+    # A tar source below this checkout must not inherit its Git attributes or
+    # repository context. An actual upstream .git in dest still takes precedence.
+    patch_env['GIT_CEILING_DIRECTORIES'] = str(dest.parent)
+    for name in item['patches']:
+        patch = ROOT / 'graphics-stack/patches' / name
+        if hashlib.sha256(patch.read_bytes()).hexdigest() != item['patch_sha256'][name]:
+            raise SystemExit('Patch hash differs: ' + name)
+        apply = ['git', '-c', 'core.autocrlf=false', '-c', 'safe.directory=' + str(dest), '-C', str(dest), 'apply']
+        subprocess.run(apply + ['--check', str(patch)], check=True, timeout=30, env=patch_env)
+        subprocess.run(apply + [str(patch)], check=True, timeout=30, env=patch_env)
+    for rel, want in item.get('patched_sources_sha256', {}).items():
+        path = dest / rel
+        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != want:
+            raise SystemExit('Patched preferred source differs: ' + rel)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     lock = json.loads((ROOT / 'graphics-stack/sources.lock.json').read_text())
@@ -78,12 +97,7 @@ def main():
         actual = subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip()
         if actual != item['commit']:
             raise SystemExit('Source commit differs')
-    for name in item['patches']:
-        patch = ROOT / 'graphics-stack/patches' / name
-        if hashlib.sha256(patch.read_bytes()).hexdigest() != item['patch_sha256'][name]:
-            raise SystemExit('Patch hash differs: ' + name)
-        subprocess.run(['git', '-C', str(dest), 'apply', '--check', str(patch)], check=True, timeout=30)
-        subprocess.run(['git', '-C', str(dest), 'apply', str(patch)], check=True, timeout=30)
+    apply_locked_patches(dest, item)
     receipt = {'component': args.component, 'source_pin': item, 'tree_sha256': tree_hash(dest),
                'hardware_qualified': False}
     (dest / '.source-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')

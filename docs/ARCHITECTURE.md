@@ -1,5 +1,10 @@
 # The Tegra path
 
+The current Steam UI uses a separate **Zink/T3** route:
+CEF/ANGLE GL -> Mesa 24.2.8/Zink -> NVIDIA GPU -> readback/CPU staging ->
+OPAQUE_FD -> Gamescope -> LCD. The EGLStream diagram below describes other
+client routes and the historical compositor. See [Zink UI](ZINK-STEAM-UI.md).
+
 The normal Gamescope DRM atomic backend is not the display owner on this legacy
 Switch setup. The Tegra backend uses the NVIDIA nvgpu Vulkan device and legacy
 Tegra DC interfaces. Existing DRM/Wayland/Headless backends remain upstream code.

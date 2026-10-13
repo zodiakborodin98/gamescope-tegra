@@ -1,0 +1,105 @@
+{
+  "date": "2026-10-13",
+  "mesa_version": "24.2.8",
+  "upstream_archive_sha256": "999d0a854f43864fc098266aaf25600ce7961318a1e2e358bff94a7f53580e30",
+  "patch_sha256": "94c4b75b0be8ddccb80269fba0a27ee324f6b1c0a1b00f30bb62e44b4e285c1e",
+  "modified_sources": {
+    "meson_options.txt": {
+      "upstream_sha256": "d7a355ee2a0a94984c21687d7a0569fcc6405ba050f36a8b263c55787171ee99",
+      "published_sha256": "936a989b8f2c665b013f92d308f52fd7e1c49eb569c85bbcb9b6f8ff601e2c22",
+      "historical_source_sha256": null
+    },
+    "src/gallium/drivers/zink/zink_context.c": {
+      "upstream_sha256": "c1779ee9550ddd5212aab2a308b01f3169b1148531007a13481e09bf64fb09fd",
+      "published_sha256": "383df5e390365fe877300b758cde046e8869cbac21f48c7e44cdc5061de3a7c0",
+      "historical_source_sha256": "383df5e390365fe877300b758cde046e8869cbac21f48c7e44cdc5061de3a7c0"
+    },
+    "src/gallium/drivers/zink/zink_render_pass.c": {
+      "upstream_sha256": "f96b48ee417edd884224f4f40b8b98df453a5694122c679d07a4f61a8c427dd6",
+      "published_sha256": "4099123661b7f2c4cea55a5333c3edd80800583c5a4b0423b8f49aff71e8ec46",
+      "historical_source_sha256": "4099123661b7f2c4cea55a5333c3edd80800583c5a4b0423b8f49aff71e8ec46"
+    },
+    "src/gallium/drivers/zink/zink_resource.c": {
+      "upstream_sha256": "c4e4878a2b8f163cea66dcf385e12fd422b585d446c19f946bb4558057bd75c1",
+      "published_sha256": "4bf1197943d90804069798337658efee0d11848bc557f279cd31226d6042ee50",
+      "historical_source_sha256": "4bf1197943d90804069798337658efee0d11848bc557f279cd31226d6042ee50"
+    },
+    "src/gallium/drivers/zink/zink_screen.c": {
+      "upstream_sha256": "e8cff9bad63724db66bcbad77e78012622263e05f8b9503ec0a9f19e0a0b75a1",
+      "published_sha256": "77331c71a1eb95006f49094f3c2a18797be2325cb8c19de96e156f923d1766dc",
+      "historical_source_sha256": "77331c71a1eb95006f49094f3c2a18797be2325cb8c19de96e156f923d1766dc"
+    },
+    "src/gallium/frontends/dri/kopper.c": {
+      "upstream_sha256": "842f96823e6095372644593dc006a1ce046539e4f60aa9ebb43a6c5648903ff3",
+      "published_sha256": "f7adc198608a31faa2691a14d73407c3affa04e0041e41ecda8df8c2a14e168a",
+      "historical_source_sha256": "f7adc198608a31faa2691a14d73407c3affa04e0041e41ecda8df8c2a14e168a"
+    },
+    "src/glx/drisw_glx.c": {
+      "upstream_sha256": "39fd94a11f35d199f144942b7b6b8edf9df91b2abf6339a9a496c5e700ed62d3",
+      "published_sha256": "244b0016bb020abc259355e04f53038329f6dcb35d79e03a18b377395f1313cc",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/m7g_t3_adapter.c": {
+      "upstream_sha256": null,
+      "published_sha256": "aa59a2f5e6f2b983bb1382973f4d31808d2d593aa8d57b40095c3261fda9fc9e",
+      "historical_source_sha256": "e872dc1782be91b7f43deb3fe213046d408233751ce27c7165fdcec465574957"
+    },
+    "src/glx/m7g-t3/m7g_t3_adapter.h": {
+      "upstream_sha256": null,
+      "published_sha256": "8efa6b6840fed8dd6484fc5b391e58f6a1a07c2fe8a9b00ba346f4db4f6bb032",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/m7g_t3_transport.h": {
+      "upstream_sha256": null,
+      "published_sha256": "81b4cfc06303d6780798c92ed7cfeae437fe919a085f9726c679b1e4e803be95",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/m7g_t3_transport_stub.c": {
+      "upstream_sha256": null,
+      "published_sha256": "782f72dfd7a646f01f11399636a9e40fe16be256af3f71fecab3ffe3d7617685",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/m7g_t3_transport_vk.c": {
+      "upstream_sha256": null,
+      "published_sha256": "01b74692afb89b191df0a1b9e2f39763b9b0384e54dd1d5eba413b1a169a31aa",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/protocol/gamescope-swapchain-client-protocol.h": {
+      "upstream_sha256": null,
+      "published_sha256": "fd494c9f6393e69610fe356e1fb74aedfb3e1df04768cd5c7c01c178503a4b54",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/protocol/gamescope-swapchain-protocol.c": {
+      "upstream_sha256": null,
+      "published_sha256": "880492f90c2b14389265198c063c5be9cf5c0656cf8de050be8e063cc0412ff5",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/protocol/tegra-l4t-buffer-client-protocol.h": {
+      "upstream_sha256": null,
+      "published_sha256": "132878f3a858d54c333c338ee7ad0f173503752b937e1d6484d96eb6d47713d2",
+      "historical_source_sha256": null
+    },
+    "src/glx/m7g-t3/protocol/tegra-l4t-buffer-protocol.c": {
+      "upstream_sha256": null,
+      "published_sha256": "194d7b688957bde5662c0873be09c7fe2f057a2d2f60e69cd5a33bfa929af4fc",
+      "historical_source_sha256": null
+    },
+    "src/glx/meson.build": {
+      "upstream_sha256": "990c033a173ef3bb366b8d77c6e2502625e8a1af68d224d1ea3adcb7d694f428",
+      "published_sha256": "841735058e8494f1892e25162fdecaa3fa4c0989ed55ad3b1a8d19bd15fcee93",
+      "historical_source_sha256": null
+    },
+    "src/util/m7g_t3.h": {
+      "upstream_sha256": null,
+      "published_sha256": "fa75a7b4eedb1b823fce56a6fb29fe1339039b6508fadeaaee921d9116c25e90",
+      "historical_source_sha256": null
+    }
+  },
+  "unused_ci_inputs_retained_upstream": [],
+  "historical_outputs_not_bundled": {
+    "gallium": "b5aa37d35efef4e9fa39897f4359882b21c3297fa14848e3ba8c6373abaf18d0",
+    "GLX": "996797ed16368fcf9497aca92ac00a694774cf3b81d03a98eac641ffe4d38e87",
+    "bootstrap": "98330d08b65f02d49e94adffd707e744b81c8fd052c73a8f606cffa00559c0a6"
+  },
+  "fresh_build_hardware_qualified": false
+}

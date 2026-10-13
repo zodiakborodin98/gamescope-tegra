@@ -1,5 +1,13 @@
 # Evidence and limits (2026-10-12)
 
+**Update 13 October 2026:** the tested development Switch now has a persistent
+854x480 Zink/NVIDIA Steam/CEF baseline. UI46 passed 180 s and user visual checks;
+240p/540p/720p were also observed. Optional diagnostics were subsequently
+disabled at the user's request; that profile's visual/performance results are
+pending. [Route, sources and CPU costs](ZINK-STEAM-UI.md). The table below
+records the older publication/compositor snapshot and its still-open game and
+consumer limitations; it is not a claim that Steam UI still needs llvmpipe.
+
 This is an alpha source port, not a general Switch Linux graphics distribution.
 
 | Area | Evidence / limitation |

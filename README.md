@@ -12,8 +12,9 @@
 
 An **experimental source port**, based on Valve Gamescope, for the legacy
 NVIDIA Tegra X1 / L4T 32.7.4 stack used by this Switch Linux development setup.
-The historical baseline displayed Steam GamepadUI and native FEZ/Super Meat Boy
-on a physical Switch. This is a source release candidate, **not a complete
+The current development baseline displays **854x480 Steam GamepadUI on
+Zink/NVIDIA**, with physical-screen confirmation. Historical native FEZ/Super
+Meat Boy demonstrations also ran on a physical Switch. This is a source release candidate, **not a complete
 SteamOS distribution or a stable Vulkan gaming release**.
 
 ## What this port implements
@@ -22,9 +23,9 @@ SteamOS distribution or a stable Vulkan gaming release**.
 - A GPU GOB conversion/presenter path, with the accepted 180-degree orientation
   and source-X compensation for the portrait 720x1280 panel.
 - Xwayland EGLStream consumption and private OPAQUE_FD transport into Gamescope.
-- NVIDIA Vulkan rendering/presentation in Gamescope. The Steam UI in the
-  historical configuration uses private CPU Mesa/llvmpipe; this is distinct
-  from the compositor's NVIDIA renderer.
+- NVIDIA Vulkan rendering/presentation in Gamescope and a working private
+  Mesa 24.2.8/Zink/T3 Steam UI route. llvmpipe is retained as rollback;
+  CPU readback/copies remain in the current UI transport.
 - A separately labelled experimental EGLStream ownership/lifetime patch.
 
 The source snapshot reconstructs the accepted `b9f5847f…` implementation from
@@ -54,6 +55,13 @@ The source port and the broader Steam integration have different dependency
 scopes. Switchdeck's installers, Steam payloads and Proton tools are not bundled
 in this Gamescope source package. See [NOTICE](NOTICE.md) and
 [source provenance](docs/PROVENANCE.md) for exact origins and license scope.
+
+## Current Zink UI
+
+[How the working route is built and why CPU work remains](docs/ZINK-STEAM-UI.md).
+The profile uses pinned Mesa 24.2.8 plus the complete T3/TFP/child-upload/layout/resize
+changes, not unmodified Mesa 26. The new source recipes do not distribute Steam,
+NVIDIA or the private runtime, and a fresh build requires its own qualification.
 
 ## Quick start: source build
 

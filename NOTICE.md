@@ -204,3 +204,13 @@ another component, whose license is retained. The Tegra implementation and its
 experimental lifetime patch retain GPL scope. No claim of authorship or
 relicensing is made over upstream code.
 
+
+## Mesa 24.2.8 / Zink / T3 additions (13 October 2026)
+
+The patch retains the original Mesa/Collabora/VMware and other per-file notices.
+New original T3 transport/adapter implementation, early-ICD bootstrap and project
+packaging use GPL-2.0-or-later. Generated Wayland protocol code retains its
+embedded MIT notices; preferred tegra-l4t-buffer and gamescope-swapchain XML is
+in gamescope/protocol. Combining the original GPL T3 additions with permissive
+Mesa does not relicense upstream's original standalone files. Fetched Mesa keeps
+its complete LICENSE/docs/license material. No proprietary driver/client is included.

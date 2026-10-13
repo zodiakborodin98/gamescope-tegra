@@ -1,5 +1,10 @@
 # Graphics stack source recipes
 
+**13 October 2026:** fetch/build component `mesa-zink-t3` for the measured
+Mesa 24.2.8 Steam GPU route. `mesa` still selects the historical26.0.3 profile.
+`steam-zink/` contains the open bootstrap source and exact local-CEF adjustment
+helper; no proprietary binary is included. See [full recipe](../docs/ZINK-STEAM-UI.md).
+
 The compositor, client GL, X server and Wayland/EGLStream libraries are separate
 components. This directory records their source pins and actual project patches.
 It does not flatten upstream repositories or redistribute closed NVIDIA software.
@@ -8,7 +13,8 @@ It does not flatten upstream repositories or redistribute closed NVIDIA software
 |---|---|---|
 | Gamescope Tegra | in-tree reconstruction, see root source lock | fresh source compile/link PASS; new ELF hardware acceptance pending |
 | Mesa client | signed release 26.0.3, locked archive SHA | historical private llvmpipe8+depthfix2 functional/human UI PASS; slow CPU fallback |
-| Zink | Mesa 26.0.3 upstream build profile | experimental; no working Steam GPU/Zink compatibility claim |
+| Zink/T3 | pinned Mesa 24.2.8 + published T3/TFP/child-upload/depth-layout/resize patch | real Steam/CEF GPU UI; 480p baseline, hardware + human short-test PASS |
+| Generic Zink | Mesa 26.0.3 upstream profile | not the legacy-driver-qualified Steam route |
 | Xwayland | xserver23.2.7 commit9b10be99 + size override patch | historical EGLStream and240p UI/720p-game path accepted |
 | Wayland |1.26.0 commit87cc8a87 | native scanner source reproduced; target library depends on user sysroot |
 | egl-wayland | NVIDIA1.1.23 commit2a953fc8 | preferred protocol XML reproduced; runtime requires compatible NVIDIA EGL vendor |
@@ -67,9 +73,9 @@ Mesa/LLVM software-client variables remain scoped to the Steam child.
 
 Closed NVIDIA ICD/EGL/core/producer libraries are external, licensed inputs.
 Driver filename `libGLX_nvidia.so.0` can represent a Vulkan ICD; that does not imply
-a working client GLX frontend. Client Zink under the accepted Xwayland still has
-unresolved init/Steam semantics. Do not equate its source profile with the FEX
-GPU/Wayland synthetic successes described in the research repository.
+a working client GLX frontend. Client Zink now uses the qualified early native ICD initialization and T3
+presentation route documented in [Zink Steam UI](../docs/ZINK-STEAM-UI.md).
+The generic Mesa 26 profile and FEX/Wayland synthetic proofs remain different paths.
 
 Original packaging is GPL-2.0-or-later. Mesa, X.Org, Wayland, egl-wayland and LLVM
 retain their actual upstream/per-file licenses. The LLVM metadata patch is an

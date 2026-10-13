@@ -1,0 +1,3214 @@
+diff --git a/meson_options.txt b/meson_options.txt
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -758,3 +758,9 @@
+                 'the default driconf file is hardcoded into Mesa. ' +
+                 'Requires expat.'
+ )
++
++option('m7g-t3-transport',
++       type : 'combo',
++       choices : ['vk', 'stub'],
++       value : 'vk',
++       description : 'M7g T3 private Steam-compat adapter transport backend (vk = accepted OPAQUE_FD transport; stub = test-only host smoke)')
+diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
+--- a/src/gallium/drivers/zink/zink_context.c
++++ b/src/gallium/drivers/zink/zink_context.c
+@@ -1,3 +1,4 @@
++#include <unistd.h>
+ /*
+  * Copyright 2018 Collabora Ltd.
+  *
+@@ -3187,8 +3188,15 @@
+    else if (!zink_screen(ctx->base.screen)->info.have_EXT_attachment_feedback_loop_layout &&
+             layout == VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)
+       layout = VK_IMAGE_LAYOUT_GENERAL;
++   bool m9r_ztrace = !(res->aspect & VK_IMAGE_ASPECT_COLOR_BIT) && getenv("M9R_LAYOUT_TRACE");
++   static unsigned m9r_zcount;
++   if (m9r_ztrace && __atomic_fetch_add(&m9r_zcount, 1, __ATOMIC_RELAXED) < 128)
++      fprintf(stderr, "M9R_ZS_PREP pid=%ld ctx=%p image=%p old=%u desired=%u valid=%u rp=%p track=%u in_rp=%u idx=%u access=%u pipeline=%u\n", (long)getpid(), (void*)ctx, (void*)res->obj->image, res->layout, layout, res->valid, (void*)ctx->gfx_pipeline_state.render_pass, ctx->track_renderpasses, ctx->in_rp, i, access, pipeline);
+    if (res->valid || res->layout != layout)
+       zink_screen(ctx->base.screen)->image_barrier(ctx, res, layout, access, pipeline);
++   if (m9r_ztrace && __atomic_load_n(&m9r_zcount, __ATOMIC_RELAXED) <= 128)
++      fprintf(stderr, "M9R_ZS_AFTER pid=%ld ctx=%p image=%p actual=%u rp=%p\n", (long)getpid(), (void*)ctx, (void*)res->obj->image, res->layout, (void*)ctx->gfx_pipeline_state.render_pass);
++
+    if (!(res->aspect & VK_IMAGE_ASPECT_COLOR_BIT))
+       ctx->zsbuf_readonly = res->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    res->obj->unordered_read = res->obj->unordered_write = false;
+diff --git a/src/gallium/drivers/zink/zink_render_pass.c b/src/gallium/drivers/zink/zink_render_pass.c
+--- a/src/gallium/drivers/zink/zink_render_pass.c
++++ b/src/gallium/drivers/zink/zink_render_pass.c
+@@ -1,3 +1,4 @@
++#include <unistd.h>
+ /*
+  * Copyright 2018 Collabora Ltd.
+  *
+@@ -756,6 +757,30 @@
+ #endif
+    rpbi.pNext = &infos;
+ 
++   if (ctx->blitting && ctx->gfx_pipeline_state.render_pass->state.have_zsbuf &&
++       getenv("M9R_ZS_RP_LAYOUT_FIX") && !strcmp(getenv("M9R_ZS_RP_LAYOUT_FIX"), "1")) {
++      struct zink_surface *m9r_surf = zink_csurface(ctx->fb_state.zsbuf);
++      struct zink_resource *m9r_res = zink_resource(m9r_surf->base.texture);
++      const struct zink_rt_attrib *m9r_rt = &ctx->gfx_pipeline_state.render_pass->state.rts[ctx->fb_state.nr_cbufs];
++      if (!m9r_rt->resolve && !zink_transient_surface(ctx->fb_state.zsbuf) &&
++          m9r_res->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
++          get_zs_rt_layout(m9r_rt) == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL) {
++         VkPipelineStageFlags m9r_stage;
++         VkAccessFlags m9r_access;
++         VkImageLayout m9r_layout = zink_render_pass_attachment_get_barrier_info(m9r_rt, false, &m9r_stage, &m9r_access);
++         fprintf(stderr, "M9R_ZS_FIX_BEFORE pid=%ld image=%p old=%u desired=%u blitting=%u aspect=%u\n", (long)getpid(), (void*)m9r_res->obj->image, m9r_res->layout, m9r_layout, ctx->blitting, m9r_res->aspect);
++         zink_screen(ctx->base.screen)->image_barrier(ctx, m9r_res, m9r_layout, m9r_access, m9r_stage);
++         fprintf(stderr, "M9R_ZS_FIX_AFTER pid=%ld image=%p actual=%u desired=%u\n", (long)getpid(), (void*)m9r_res->obj->image, m9r_res->layout, m9r_layout);
++         if (m9r_res->layout != m9r_layout) { fflush(stderr); _exit(91); }
++      }
++   }
++   static unsigned m9r_rpcount;
++   if (ctx->gfx_pipeline_state.render_pass->state.have_zsbuf && getenv("M9R_LAYOUT_TRACE") &&
++       __atomic_fetch_add(&m9r_rpcount, 1, __ATOMIC_RELAXED) < 128) {
++      struct zink_resource *m9r_res = zink_resource(ctx->fb_state.zsbuf->texture);
++      const struct zink_rt_attrib *m9r_rt = &ctx->gfx_pipeline_state.render_pass->state.rts[ctx->fb_state.nr_cbufs];
++      fprintf(stderr, "M9R_ZS_RP pid=%ld ctx=%p image=%p actual=%u expected=%u rp=%p cmd=%p track=%u blitting=%u aspect=%u needs_write=%u clear_color=%u clear_stencil=%u\n", (long)getpid(), (void*)ctx, (void*)m9r_res->obj->image, m9r_res->layout, get_zs_rt_layout(m9r_rt), (void*)ctx->gfx_pipeline_state.render_pass, (void*)ctx->bs->cmdbuf, ctx->track_renderpasses, ctx->blitting, m9r_res->aspect, m9r_rt->needs_write, m9r_rt->clear_color, m9r_rt->clear_stencil);
++   }
+    VKCTX(CmdBeginRenderPass)(ctx->bs->cmdbuf, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+    ctx->in_rp = true;
+    return clear_buffers;
+diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
+--- a/src/gallium/drivers/zink/zink_resource.c
++++ b/src/gallium/drivers/zink/zink_resource.c
+@@ -1,3 +1,4 @@
++#include <unistd.h>
+ /*
+  * Copyright 2018 Collabora Ltd.
+  *
+@@ -1429,6 +1430,21 @@
+ 
+    unsigned num_planes = util_format_get_num_planes(templ->format);
+    alloc_info->need_dedicated = get_image_memory_requirement(screen, obj, num_planes, &reqs);
++   bool m9r_force_ded = getenv("M9R_IMAGE_FORCE_DEDICATED") && !strcmp(getenv("M9R_IMAGE_FORCE_DEDICATED"), "1");
++   bool m9r_mem_trace = getenv("M9R_IMAGE_MEMORY_TRACE") && !strcmp(getenv("M9R_IMAGE_MEMORY_TRACE"), "1");
++   bool m9r_original_ded = alloc_info->need_dedicated;
++   bool m9r_ded_applied = false;
++   if (m9r_force_ded && !alloc_info->whandle && !alloc_info->user_mem && num_planes == 1 &&
++       !(templ->flags & PIPE_RESOURCE_FLAG_SPARSE)) {
++      if (!screen->info.have_KHR_dedicated_allocation) { fprintf(stderr, "M9R_IMAGE_MEMORY_REFUSED dedicated extension unavailable\n"); fflush(stderr); _exit(92); }
++      alloc_info->need_dedicated = true;
++      m9r_ded_applied = true;
++   }
++   static unsigned m9r_mem_count;
++   bool m9r_log = m9r_mem_trace && __atomic_fetch_add(&m9r_mem_count, 1, __ATOMIC_RELAXED) < 512;
++   if (m9r_log)
++      fprintf(stderr, "M9R_IMAGE_REQ pid=%ld dev=%p image=%p vkfmt=%u pipefmt=%u w=%u h=%u d=%u mips=%u layers=%u samples=%u tiling=%u usage=%u flags=%u reqsize=%llu align=%llu typebits=%u driver_ded=%u selected_ded=%u force=%u import=%u granularity=%llu\n", (long)getpid(), (void*)screen->dev, (void*)obj->image, ici.format, templ->format, ici.extent.width, ici.extent.height, ici.extent.depth, ici.mipLevels, ici.arrayLayers, ici.samples, ici.tiling, ici.usage, ici.flags, (unsigned long long)reqs.size, (unsigned long long)reqs.alignment, reqs.memoryTypeBits, m9r_original_ded, alloc_info->need_dedicated, m9r_force_ded, alloc_info->whandle != NULL, (unsigned long long)screen->info.props.limits.bufferImageGranularity);
++
+    if (templ->usage == PIPE_USAGE_STAGING && ici.tiling == VK_IMAGE_TILING_LINEAR)
+       alloc_info->flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    else
+@@ -1468,6 +1484,10 @@
+             return roc_fail_and_cleanup_all;
+          }
+    }
++
++   if (m9r_log)
++      fprintf(stderr, "M9R_IMAGE_BOUND pid=%ld dev=%p image=%p memory=%p offset=%llu alloc_size=%llu placement=%u slab=%u\n", (long)getpid(), (void*)screen->dev, (void*)obj->image, (void*)((templ->flags & PIPE_RESOURCE_FLAG_SPARSE) ? VK_NULL_HANDLE : zink_bo_get_mem(obj->bo)), (unsigned long long)obj->offset, (unsigned long long)obj->size, obj->bo->base.base.placement, (unsigned)!obj->bo->mem);
++   if (m9r_ded_applied && obj->offset != 0) { fprintf(stderr, "M9R_IMAGE_MEMORY_REFUSED dedicated offset nonzero\n"); fflush(stderr); _exit(92); }
+ 
+    return roc_success;
+ }
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -1,3 +1,4 @@
++#include <unistd.h>
+ /*
+  * Copyright 2018 Collabora Ltd.
+  *
+@@ -2028,11 +2029,15 @@
+ static void
+ zink_error(const char *msg)
+ {
++   fprintf(stderr, "M9R_VK_VALIDATION severity=error pid=%ld message=%.4096s\n", (long)getpid(), msg ? msg : "NULL");
++   const char *stop = getenv("M9R_VK_ABORT_ON_ERROR");
++   if (stop && !strcmp(stop, "1")) { fflush(stderr); _exit(90); }
+ }
+ 
+ static void
+ zink_warn(const char *msg)
+ {
++   fprintf(stderr, "M9R_VK_VALIDATION severity=warn pid=%ld message=%.4096s\n", (long)getpid(), msg ? msg : "NULL");
+ }
+ 
+ static void
+diff --git a/src/gallium/frontends/dri/kopper.c b/src/gallium/frontends/dri/kopper.c
+--- a/src/gallium/frontends/dri/kopper.c
++++ b/src/gallium/frontends/dri/kopper.c
+@@ -26,6 +26,7 @@
+ #include "util/format/u_format.h"
+ #include "util/u_memory.h"
+ #include "util/u_inlines.h"
++#include "util/m7g_t3.h"
+ #include "util/box.h"
+ #include "util/log.h"
+ #include "pipe/p_context.h"
+@@ -109,6 +110,15 @@
+    &driVkFlushExtension.base,
+    NULL
+ };
++
++/* Opt-in only for T3 on X servers without pixmap DRI3. Keeps real Zink
++ * GPU rendering and actual device capabilities. Only pixmap transfer changes. */
++static bool
++m9r_tfp_readback_enabled(void)
++{
++   const char *e = getenv("M9R_TFP_READBACK");
++   return m7g_t3_adapter_enabled() && e && e[0] == '1' && e[1] == '\0';
++}
+ 
+ static const __DRIconfig **
+ kopper_init_screen(struct dri_screen *screen, bool driver_name_is_inferred)
+@@ -348,12 +358,17 @@
+    if (drawable->has_modifiers) {
+       xcb_dri3_buffers_from_pixmap_cookie_t bps_cookie;
+       xcb_dri3_buffers_from_pixmap_reply_t *bps_reply;
+-      xcb_generic_error_t *error;
++      xcb_generic_error_t *error = NULL;
+ 
+       bps_cookie = xcb_dri3_buffers_from_pixmap(conn, pixmap);
+       bps_reply = xcb_dri3_buffers_from_pixmap_reply(conn, bps_cookie, &error);
+       if (!bps_reply) {
+-         mesa_loge("kopper: could not create texture from pixmap (%u)", error->error_code);
++         if (error) {
++            mesa_loge("kopper: could not create texture from pixmap (%u)", error->error_code);
++            free(error);
++         } else {
++            mesa_loge("kopper: no texture-from-pixmap reply; no X error provided");
++         }
+          return NULL;
+       }
+       drawable->image =
+@@ -371,12 +386,17 @@
+ #ifdef HAVE_DRI3
+       xcb_dri3_buffer_from_pixmap_cookie_t bp_cookie;
+       xcb_dri3_buffer_from_pixmap_reply_t *bp_reply;
+-      xcb_generic_error_t *error;
++      xcb_generic_error_t *error = NULL;
+ 
+       bp_cookie = xcb_dri3_buffer_from_pixmap(conn, pixmap);
+       bp_reply = xcb_dri3_buffer_from_pixmap_reply(conn, bp_cookie, &error);
+       if (!bp_reply) {
+-         mesa_loge("kopper: could not create texture from pixmap (%u)", error->error_code);
++         if (error) {
++            mesa_loge("kopper: could not create texture from pixmap (%u)", error->error_code);
++            free(error);
++         } else {
++            mesa_loge("kopper: no texture-from-pixmap reply; no X error provided");
++         }
+          return NULL;
+       }
+ 
+@@ -479,13 +499,24 @@
+       /* remove outdated textures */
+       if (resized) {
+          for (i = 0; i < ST_ATTACHMENT_COUNT; i++) {
+-            if (drawable->textures[i] && i < ST_ATTACHMENT_DEPTH_STENCIL && !is_pixmap) {
++            /* T3 uses ordinary, immutable-size VkImages, not kopper
++             * display targets whose swapchain can be resized lazily.
++             * Recreate attachments instead of changing their public geometry
++             * while retaining the old image/allocation and cached views. */
++            if (drawable->textures[i] && i < ST_ATTACHMENT_DEPTH_STENCIL &&
++                !is_pixmap && !m7g_t3_adapter_enabled()) {
+                drawable->textures[i]->width0 = width;
+                drawable->textures[i]->height0 = height;
+                /* force all contexts to revalidate framebuffer */
+                p_atomic_inc(&drawable->base.stamp);
+-            } else
++            } else {
++               if (drawable->textures[i] && m7g_t3_adapter_enabled()) {
++                  /* Other contexts may retain views of the old attachment.
++                   * Keep those resources unchanged and revalidate their FBO. */
++                  p_atomic_inc(&drawable->base.stamp);
++               }
+                pipe_resource_reference(&drawable->textures[i], NULL);
++            }
+             pipe_resource_reference(&drawable->msaa_textures[i], NULL);
+             if (is_pixmap && i == ST_ATTACHMENT_FRONT_LEFT) {
+                FREE(drawable->image);
+@@ -529,9 +560,12 @@
+ 
+       /* the texture already exists or not requested */
+       if (!drawable->textures[statts[i]]) {
+-         if (statts[i] == ST_ATTACHMENT_BACK_LEFT ||
+-             statts[i] == ST_ATTACHMENT_DEPTH_STENCIL ||
+-             (statts[i] == ST_ATTACHMENT_FRONT_LEFT && front_only))
++         /* M7g T3 (private, env-gated): the adapter drawable has no display
++          * targets and no presentation resources (no VkSurface/swapchain). */
++         if (!m7g_t3_adapter_enabled() &&
++             (statts[i] == ST_ATTACHMENT_BACK_LEFT ||
++              statts[i] == ST_ATTACHMENT_DEPTH_STENCIL ||
++              (statts[i] == ST_ATTACHMENT_FRONT_LEFT && front_only)))
+             bind |= PIPE_BIND_DISPLAY_TARGET;
+ 
+          if (format == PIPE_FORMAT_NONE)
+@@ -541,7 +575,8 @@
+          templ.nr_samples = 0;
+          templ.nr_storage_samples = 0;
+ 
+-         if (statts[i] < ST_ATTACHMENT_DEPTH_STENCIL && is_window) {
++         if (statts[i] < ST_ATTACHMENT_DEPTH_STENCIL && is_window &&
++             !m7g_t3_adapter_enabled()) {
+             void *data;
+             if (statts[i] == ST_ATTACHMENT_BACK_LEFT || (statts[i] == ST_ATTACHMENT_FRONT_LEFT && front_only))
+                data = &drawable->info;
+@@ -553,7 +588,8 @@
+             drawable->window_valid = !!drawable->textures[statts[i]];
+          }
+ #ifdef VK_USE_PLATFORM_XCB_KHR
+-         else if (is_pixmap && statts[i] == ST_ATTACHMENT_FRONT_LEFT && !screen->is_sw) {
++         else if (is_pixmap && statts[i] == ST_ATTACHMENT_FRONT_LEFT && !screen->is_sw &&
++                  !m9r_tfp_readback_enabled()) {
+             drawable->textures[statts[i]] = kopper_get_pixmap_buffer(drawable, format);
+             if (drawable->textures[statts[i]])
+                handle_in_fence(ctx, drawable->image);
+@@ -600,7 +636,8 @@
+                                 drawable->textures[ST_ATTACHMENT_BACK_LEFT] :
+                                 drawable->textures[ST_ATTACHMENT_FRONT_LEFT];
+ 
+-   bool do_kopper_update = is_window && ptex && screen->fd == -1;
++   bool do_kopper_update = is_window && ptex && screen->fd == -1 &&
++                           !m7g_t3_adapter_enabled();
+    if (drawable->info.bos.sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR && do_kopper_update)
+       zink_kopper_update(pscreen, ptex, &drawable->w, &drawable->h);
+    else
+@@ -724,7 +761,7 @@
+    char *map;
+    int x, y, w, h;
+    int ximage_stride, line;
+-   if (screen->has_dmabuf || drawable->is_window || drawable->info.bos.sType != VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR)
++   if ((screen->has_dmabuf && !m9r_tfp_readback_enabled()) || drawable->is_window || drawable->info.bos.sType != VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR)
+       return;
+    int cpp = util_format_get_blocksize(res->format);
+ 
+@@ -734,14 +771,28 @@
+    _mesa_glthread_finish(ctx->st->ctx);
+ 
+    get_drawable_info(drawable, &x, &y, &w, &h);
++   if (m9r_tfp_readback_enabled() &&
++       (cpp <= 0 || cpp > 16 || x < 0 || y < 0 || w <= 0 || h <= 0 ||
++        (unsigned)x + (unsigned)w > res->width0 ||
++        (unsigned)y + (unsigned)h > res->height0)) {
++      mesa_loge("M9R_TFP_READBACK_FAIL geometry");
++      _exit(86);
++   }
+ 
+    map = pipe_texture_map(pipe, res,
+                           0, 0, // level, layer,
+                           PIPE_MAP_WRITE,
+                           x, y, w, h, &transfer);
+ 
+-   /* Copy the Drawable content to the mapped texture buffer */
+-   if (!get_image_shm(drawable, x, y, w, h, res))
++   if (m9r_tfp_readback_enabled() && (!map || !transfer ||
++       (unsigned)transfer->stride < (((unsigned)w * (unsigned)cpp + 3) & ~3u))) {
++      mesa_loge("M9R_TFP_READBACK_FAIL map_or_stride");
++      _exit(86);
++   }
++   /* T3 pixmaps: existing getImage loader reads real pixels from X. No DRI3,
++    * client WSI, fake image or software rasterizer. Zink uploads/renders them.
++    * SHM resource export deliberately not attempted for this transport mode. */
++   if (m9r_tfp_readback_enabled() || !get_image_shm(drawable, x, y, w, h, res))
+       get_image(drawable, x, y, w, h, map);
+ 
+    /* The pipe transfer has a pitch rounded up to the nearest 64 pixels.
+@@ -754,6 +805,12 @@
+    }
+ 
+    pipe_texture_unmap(pipe, transfer);
++   if (m9r_tfp_readback_enabled()) {
++      static unsigned copies;
++      unsigned count = p_atomic_inc_return(&copies);
++      if (count <= 8)
++         mesa_logi("M9R_TFP_READBACK_OK count=%u w=%d h=%d cpp=%d", count, w, h, cpp);
++   }
+ }
+ 
+ static void
+diff --git a/src/glx/drisw_glx.c b/src/glx/drisw_glx.c
+--- a/src/glx/drisw_glx.c
++++ b/src/glx/drisw_glx.c
+@@ -32,6 +32,8 @@
+ #include <dlfcn.h>
+ #include "dri_common.h"
+ #include "drisw_priv.h"
++#include "util/m7g_t3.h"
++#include "m7g-t3/m7g_t3_adapter.h"
+ #ifdef HAVE_DRI3
+ #include "dri3_priv.h"
+ #endif
+@@ -665,6 +667,9 @@
+    struct drisw_drawable *pdp = (struct drisw_drawable *) pdraw;
+    struct drisw_screen *psc = (struct drisw_screen *) pdp->base.psc;
+ 
++   if (m7g_t3_adapter_enabled())
++      m7g_t3_adapter_drawable_destroyed(pdraw);
++
+    psc->core->destroyDrawable(pdp->driDrawable);
+ 
+    XDestroyDrawable(pdp, pdraw->psc->dpy, pdraw->drawable);
+@@ -767,6 +772,13 @@
+ 
+    if (flush) {
+       glFlush();
++   }
++
++   if (m7g_t3_adapter_enabled()) {
++       /* M7g T3 (private, env-gated): the adapter owns presentation for real
++        * window drawables: default-framebuffer readback -> accepted OPAQUE_FD
++        * transport + gamescope override.  No kopper swap, no WSI. */
++       return m7g_t3_adapter_swap(pdraw, psc->kopper != NULL);
+    }
+ 
+    if (psc->kopper)
+diff --git a/src/glx/m7g-t3/m7g_t3_adapter.c b/src/glx/m7g-t3/m7g_t3_adapter.c
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/m7g_t3_adapter.c
+@@ -0,0 +1,888 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* M7g T3 — private Steam-compatibility GLX/drisw/Zink presentation adapter.
++ *
++ * Task-local; enabled only by M7G_T3_ADAPTER=1 (see src/util/m7g_t3.h).
++ *
++ * Purpose: let ordinary private Mesa GLX clients (Steam/CEF and similar) use
++ * their REAL window drawables, configs and contexts with Zink GPU rendering,
++ * while the accepted OPAQUE_FD transport + Gamescope X11 content override
++ * delivers the default-framebuffer content.  No client WSI/Kopper presentation.
++ *
++ * T3 scope (differences from the frozen T2 proof adapter):
++ *   - arbitrary real pixels: no pattern/FNV expectation table, no frame cap,
++ *     no artificial pacing or final hold; diagnostics only;
++ *   - multiple window drawables per process, keyed by (Display*, XID); each owns
++ *     its own transport, epoch and generation counter, bound to the real XID;
++ *   - per-drawable size (16..4096, <=64 MiB); resize recreates the transport
++ *     bounded (drain/destroy/init);
++ *   - offscreen/pixmap drawables are NOT transported (xcb query; no X errors);
++ *   - retired swapchain: one bounded recreate attempt, then honest fail (rc29);
++ *   - arbitrary caller GL state: the readback normalizes READ_FRAMEBUFFER to the
++ *     window default framebuffer, READ_BUFFER to GL_BACK, the pixel pack buffer
++ *     to 0 (CPU destination) and the pack state to tight rows, and restores all
++ *     of it; a 64-byte canary after the w*h*4 buffer detects any overrun;
++ *   - separate GLX read drawable (currentReadable != this window): fail-closed
++ *     BEFORE capture (rc45), because FBO 0 read side would not be this window;
++ *   - transport event progress during the stream: bounded service(0) before the
++ *     retired check and after every commit (release/returned/retired/protocol
++ *     events); service failure is an explicit FAIL, never a hidden fallback;
++ *   - live identity/provenance: T3_IDENTITY (pid/exe/starttime/run_tag/WM/XID/
++ *     server_id/epoch/loaded libGLX) and T3_RENDERER once per process; every
++ *     T3_SWAP carries epoch and a CLOCK_MONOTONIC nanosecond timestamp.
++ *
++ * Retained contract: current drawable/context checks, windows-only presentation,
++ * per-slot immutable registration, ready/returned semaphores, external
++ * ownership barriers, bounded reuse, fail-closed teardown.  Adapter failures:
++ * "T3_FAIL stage=... rc=..." then _exit(rc) (fail-closed; no silent skip).
++ */
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE
++#endif
++#include <stdio.h>
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <time.h>
++#include <dlfcn.h>
++#include <pthread.h>
++#include <X11/Xlib.h>
++#include <X11/Xlib-xcb.h>
++#include <xcb/xcb.h>
++
++#include "glxclient.h"
++#include "m7g_t3_transport.h"
++#include "m7g_t3_adapter.h"
++
++/* gl.h in this tree declares only through GL 2.1 prototypes; these two core
++ * entry points are exported by libGL and needed for state isolation. */
++extern void glBindFramebuffer(GLenum target, GLuint framebuffer);
++extern void glBindBuffer(GLenum target, GLuint buffer);
++
++#ifndef GL_READ_FRAMEBUFFER
++#define GL_READ_FRAMEBUFFER 0x8CA8
++#endif
++#ifndef GL_READ_FRAMEBUFFER_BINDING
++#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
++#endif
++#ifndef GL_PIXEL_PACK_BUFFER
++#define GL_PIXEL_PACK_BUFFER 0x88EB
++#endif
++#ifndef GL_PIXEL_PACK_BUFFER_BINDING
++#define GL_PIXEL_PACK_BUFFER_BINDING 0x88ED
++#endif
++#ifndef GL_PACK_ALIGNMENT
++#define GL_PACK_ALIGNMENT 0x0D05
++#endif
++#ifndef GL_PACK_ROW_LENGTH
++#define GL_PACK_ROW_LENGTH 0x0D02
++#endif
++#ifndef GL_PACK_SKIP_ROWS
++#define GL_PACK_SKIP_ROWS 0x0D03
++#endif
++#ifndef GL_PACK_SKIP_PIXELS
++#define GL_PACK_SKIP_PIXELS 0x0D04
++#endif
++#ifndef GL_PACK_IMAGE_HEIGHT
++#define GL_PACK_IMAGE_HEIGHT 0x806C
++#endif
++#ifndef GL_PACK_SKIP_IMAGES
++#define GL_PACK_SKIP_IMAGES 0x806D
++#endif
++#ifndef GL_PACK_LSB_FIRST
++#define GL_PACK_LSB_FIRST 0x0D01
++#endif
++#ifndef GL_PACK_SWAP_BYTES
++#define GL_PACK_SWAP_BYTES 0x0D00
++#endif
++
++#define M7G_T3_MAX_DRAWABLES 16u
++#define M7G_T3_CANARY 64u
++
++struct t3_drawable {
++    Display         *dpy;
++    XID              xid;
++    m7g_t3_xport    *xp;
++    unsigned         w, h;
++    unsigned         gen;
++    unsigned         epoch;   /* transport instance number (open/resize/recover) */
++    unsigned         swaps;
++    unsigned char   *pixels;
++    size_t           pixels_cap; /* need + canary */
++    unsigned         retired_burst;
++    int              open_logged;
++};
++
++static pthread_mutex_t t3_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct t3_drawable t3_slots[M7G_T3_MAX_DRAWABLES];
++static int t3_engaged_logged;
++static int t3_nonwindow_logged;
++static int t3_renderer_logged;
++static unsigned t3_total_swaps;
++
++static void
++t3_fail(const char *stage, int rc)
++{
++    fflush(stdout);
++    fprintf(stdout, "T3_FAIL stage=%s rc=%d (adapter)\n", stage, rc);
++    fflush(stdout);
++    _exit(rc);
++}
++
++static unsigned long long
++t3_now_ns(void)
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
++}
++
++static void
++t3_sanitize(char *s)
++{
++    for (; *s; s++) {
++        unsigned char c = (unsigned char)*s;
++        if (c < 0x20 || c > 0x7e)
++            *s = '_';
++    }
++}
++
++/* ------------------------------------------------------------ window query */
++/* xcb-only query: consumes BadDrawable/BadWindow error cookies instead of
++ * triggering the Xlib default error handler. Returns 1 for a mapped (viewable)
++ * window, 0 for non-window/unmapped, -1 on query error. */
++static int
++t3_query_window(Display *dpy, XID xid, unsigned *w, unsigned *h)
++{
++    xcb_connection_t *conn = XGetXCBConnection(dpy);
++    xcb_get_window_attributes_cookie_t cookie = xcb_get_window_attributes(conn, xid);
++    xcb_generic_error_t *err = NULL;
++    xcb_get_window_attributes_reply_t *rep =
++        xcb_get_window_attributes_reply(conn, cookie, &err);
++    if (err) {
++        free(err);
++        return 0; /* not a window (pixmap) or gone: no presentation */
++    }
++    if (!rep)
++        return -1;
++    if (rep->map_state != XCB_MAP_STATE_VIEWABLE) {
++        free(rep);
++        return 0;
++    }
++    free(rep);
++
++    /* window attributes carry no size; geometry has it (same error-cookie style) */
++    xcb_get_geometry_cookie_t gcookie = xcb_get_geometry(conn, xid);
++    xcb_generic_error_t *gerr = NULL;
++    xcb_get_geometry_reply_t *grep = xcb_get_geometry_reply(conn, gcookie, &gerr);
++    if (gerr) {
++        free(gerr);
++        return 0;
++    }
++    if (!grep)
++        return -1;
++    if (grep->width < 16 || grep->height < 16) {
++        free(grep);
++        return 0;
++    }
++    *w = grep->width;
++    *h = grep->height;
++    free(grep);
++    return 1;
++}
++
++/* -------------------------------------------------------- X identity (cheap) */
++static xcb_atom_t
++t3_atom(xcb_connection_t *conn, const char *name)
++{
++    xcb_intern_atom_cookie_t c = xcb_intern_atom(conn, 0, (uint16_t)strlen(name), name);
++    xcb_generic_error_t *err = NULL;
++    xcb_intern_atom_reply_t *r = xcb_intern_atom_reply(conn, c, &err);
++    xcb_atom_t a = 0;
++    if (err) {
++        free(err);
++        return 0;
++    }
++    if (r) {
++        a = r->atom;
++        free(r);
++    }
++    return a;
++}
++
++/* returns property format (8/32) or 0; copies up to cap bytes into out */
++static int
++t3_prop(xcb_connection_t *conn, xcb_window_t w, xcb_atom_t prop, uint8_t *out,
++        size_t cap, size_t *outlen)
++{
++    *outlen = 0;
++    if (!prop)
++        return 0;
++    xcb_get_property_cookie_t c = xcb_get_property(conn, 0, w, prop,
++                                                   XCB_GET_PROPERTY_TYPE_ANY, 0, 64);
++    xcb_generic_error_t *err = NULL;
++    xcb_get_property_reply_t *r = xcb_get_property_reply(conn, c, &err);
++    if (err) {
++        free(err);
++        return 0;
++    }
++    if (!r)
++        return 0;
++    int len = xcb_get_property_value_length(r);
++    const uint8_t *v = xcb_get_property_value(r);
++    if (v && len > 0) {
++        size_t m = (size_t)len;
++        if (m > cap)
++            m = cap;
++        memcpy(out, v, m);
++        *outlen = m;
++    }
++    int fmt = r->format;
++    free(r);
++    return fmt;
++}
++
++static void
++t3_x11_identity(Display *dpy, XID xid, long *wm_pid, char *wm_class, size_t cc,
++                char *wm_name, size_t nc)
++{
++    xcb_connection_t *conn = XGetXCBConnection(dpy);
++    xcb_atom_t a_pid = t3_atom(conn, "_NET_WM_PID");
++    xcb_atom_t a_class = t3_atom(conn, "WM_CLASS");
++    xcb_atom_t a_netname = t3_atom(conn, "_NET_WM_NAME");
++    xcb_atom_t a_name = t3_atom(conn, "WM_NAME");
++    uint8_t buf[128];
++    size_t n = 0;
++
++    *wm_pid = -1;
++    wm_class[0] = '\0';
++    wm_name[0] = '\0';
++
++    if (t3_prop(conn, xid, a_pid, buf, sizeof(buf), &n) == 32 && n >= 4) {
++        uint32_t v = 0;
++        memcpy(&v, buf, 4);
++        *wm_pid = (long)v;
++    }
++    if (t3_prop(conn, xid, a_class, buf, sizeof(buf), &n) == 8 && n > 0) {
++        size_t m = n > cc - 1 ? cc - 1 : n;
++        memcpy(wm_class, buf, m);
++        wm_class[m] = '\0';
++        t3_sanitize(wm_class);
++    }
++    if (t3_prop(conn, xid, a_netname, buf, sizeof(buf), &n) == 8 && n > 0) {
++        size_t m = n > nc - 1 ? nc - 1 : n;
++        memcpy(wm_name, buf, m);
++        wm_name[m] = '\0';
++    } else if (t3_prop(conn, xid, a_name, buf, sizeof(buf), &n) == 8 && n > 0) {
++        size_t m = n > nc - 1 ? nc - 1 : n;
++        memcpy(wm_name, buf, m);
++        wm_name[m] = '\0';
++    }
++    t3_sanitize(wm_name);
++}
++
++static void
++t3_read_starttime(char *out, size_t cap)
++{
++    char buf[1024];
++    out[0] = '\0';
++    int fd = open("/proc/self/stat", O_RDONLY);
++    if (fd < 0)
++        return;
++    ssize_t n = read(fd, buf, sizeof(buf) - 1);
++    close(fd);
++    if (n <= 0)
++        return;
++    buf[n] = '\0';
++    char *p = strrchr(buf, ')');
++    if (!p)
++        return;
++    p++;
++    /* the 20th token after comm is field 22 = starttime */
++    for (int i = 0; i < 20 && *p; i++) {
++        while (*p == ' ')
++            p++;
++        char *tok = p;
++        while (*p && *p != ' ')
++            p++;
++        if (i == 19) {
++            size_t m = (size_t)(p - tok);
++            if (m >= cap)
++                m = cap - 1;
++            memcpy(out, tok, m);
++            out[m] = '\0';
++            return;
++        }
++    }
++}
++
++static unsigned long
++t3_read_server_id(Display *dpy)
++{
++    int scr = DefaultScreen(dpy);
++    Atom a = XInternAtom(dpy, "GAMESCOPE_XWAYLAND_SERVER_ID", False);
++    Atom type = None;
++    int fmt = 0;
++    unsigned long n = 0, after = 0;
++    unsigned char *data = NULL;
++    unsigned long server_id = 0;
++    int ok = 0;
++    if (a != None &&
++        XGetWindowProperty(dpy, RootWindow(dpy, scr), a, 0, 1, False, AnyPropertyType,
++                           &type, &fmt, &n, &after, &data) == Success &&
++        data && fmt == 32 && n >= 1) {
++        server_id = *(unsigned long *)data;
++        ok = 1;
++    }
++    if (data)
++        XFree(data);
++    if (!ok) {
++#ifdef M7G_TEST_HOOKS
++        const char *fake = getenv("M7G_T3_FAKE_SERVER_ID");
++        if (fake && *fake) {
++            server_id = strtoul(fake, NULL, 0);
++            ok = 1;
++            printf("T3_TEST fake_server_id=%lu\n", server_id);
++        }
++#endif
++    }
++    if (!ok)
++        t3_fail("server-id-property", 42);
++    return server_id;
++}
++
++static struct t3_drawable *
++t3_get_free_slot(void)
++{
++    for (unsigned i = 0; i < M7G_T3_MAX_DRAWABLES; i++) {
++        if (!t3_slots[i].dpy && !t3_slots[i].xp && !t3_slots[i].pixels)
++            return &t3_slots[i];
++    }
++    return NULL;
++}
++
++static const char *
++t3_basename(const char *p)
++{
++    const char *s = strrchr(p, '/');
++    return s ? s + 1 : p;
++}
++
++static void
++t3_log_identity(struct t3_drawable *d, unsigned long server_id)
++{
++    long wm_pid = -1;
++    char wm_class[65] = "";
++    char wm_name[65] = "";
++    char exe[256] = "unknown";
++    char starttime[32] = "?";
++    char run_tag[64] = "";
++    char obs_dir[128] = "";
++    const char *libglx = "?";
++    Dl_info di;
++    ssize_t n;
++
++    n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
++    if (n > 0)
++        exe[n] = '\0';
++    else
++        strcpy(exe, "unknown");
++    t3_read_starttime(starttime, sizeof(starttime));
++    {
++        /* run_tag = the wrapper probe-unit run id (explicit binding supplied by
++         * the thin); observer_dir = the thin's own tmp dir, a DISTINCT id bound
++         * through the captured thin binding line. */
++        const char *rt = getenv("M7G_ZINK_T3_WRAPPER_RUN_ID");
++        const char *od = getenv("M7G_ZINK_T3_RUNDIR");
++        if (rt && *rt) {
++            strncpy(run_tag, rt, sizeof(run_tag) - 1);
++            run_tag[sizeof(run_tag) - 1] = '\0';
++        }
++        if (od && *od) {
++            strncpy(obs_dir, od, sizeof(obs_dir) - 1);
++            obs_dir[sizeof(obs_dir) - 1] = '\0';
++        }
++    }
++    if (dladdr((void *)&m7g_t3_adapter_swap, &di) && di.dli_fname)
++        libglx = di.dli_fname;
++    t3_x11_identity(d->dpy, d->xid, &wm_pid, wm_class, sizeof(wm_class),
++                    wm_name, sizeof(wm_name));
++    printf("T3_IDENTITY pid=%ld exe=%s starttime=%s run_tag=%s observer_dir=%s xid=0x%lx server_id=%lu epoch=%u wm_pid=%ld wm_class=\"%s\" wm_name=\"%s\" libglx=%s\n",
++           (long)getpid(), exe, starttime, run_tag, obs_dir, (unsigned long)d->xid,
++           server_id, d->epoch, wm_pid, wm_class, wm_name, libglx);
++}
++
++static void
++t3_log_renderer(void)
++{
++    const GLubyte *r = glGetString(GL_RENDERER);
++    const GLubyte *v = glGetString(GL_VERSION);
++    const GLubyte *vd = glGetString(GL_VENDOR);
++    char rb[160] = "(null)", vb[96] = "(null)", vdb[96] = "(null)";
++    if (r) { strncpy(rb, (const char *)r, sizeof(rb) - 1); rb[sizeof(rb) - 1] = 0; }
++    if (v) { strncpy(vb, (const char *)v, sizeof(vb) - 1); vb[sizeof(vb) - 1] = 0; }
++    if (vd) { strncpy(vdb, (const char *)vd, sizeof(vdb) - 1); vdb[sizeof(vdb) - 1] = 0; }
++    t3_sanitize(rb);
++    t3_sanitize(vb);
++    t3_sanitize(vdb);
++    printf("T3_RENDERER pid=%ld renderer=\"%s\" version=\"%s\" vendor=\"%s\" t_ns=%llu\n",
++           (long)getpid(), rb, vb, vdb, t3_now_ns());
++}
++
++/* Create/recreate the per-drawable transport at the current size. */
++static void
++t3_open_transport(struct t3_drawable *d, unsigned w, unsigned h)
++{
++    unsigned long server_id;
++    int rc;
++
++    if (d->xp) {
++        rc = m7g_t3_xport_destroy(d->xp);
++        d->xp = NULL;
++        if (rc)
++            t3_fail("resize-teardown", rc);
++    }
++    if (d->pixels_cap < (size_t)w * h * 4u + M7G_T3_CANARY) {
++        unsigned char *np = realloc(d->pixels, (size_t)w * h * 4u + M7G_T3_CANARY);
++        if (!np)
++            t3_fail("readback-alloc", 40);
++        d->pixels = np;
++        d->pixels_cap = (size_t)w * h * 4u + M7G_T3_CANARY;
++    }
++    d->epoch++;
++    server_id = t3_read_server_id(d->dpy);
++    rc = m7g_t3_xport_init(&d->xp, (uint32_t)server_id, (uint32_t)d->xid, w, h);
++    if (rc != 0)
++        t3_fail("transport-init", rc);
++    d->w = w;
++    d->h = h;
++    printf("T3_DRAWABLE_OPEN xid=0x%lx w=%u h=%u server_id=%lu epoch=%u\n",
++           (unsigned long)d->xid, w, h, server_id, d->epoch);
++    t3_log_identity(d, server_id);
++    if (!t3_renderer_logged) {
++        t3_renderer_logged = 1;
++        t3_log_renderer();
++    }
++    if (!t3_engaged_logged) {
++        const char *rt = getenv("M7G_ZINK_T3_WRAPPER_RUN_ID");
++        const char *od = getenv("M7G_ZINK_T3_RUNDIR");
++        char tag[64] = "";
++        char obs[128] = "";
++        t3_engaged_logged = 1;
++        if (rt && *rt) {
++            strncpy(tag, rt, sizeof(tag) - 1);
++            tag[sizeof(tag) - 1] = '\0';
++        }
++        if (od && *od) {
++            strncpy(obs, od, sizeof(obs) - 1);
++            obs[sizeof(obs) - 1] = '\0';
++        }
++        printf("T3_ADAPTER_ENGAGED backend=%s run_tag=%s observer_dir=%s pid=%ld\n",
++               m7g_t3_xport_backend(), tag, obs, (long)getpid());
++    }
++}
++
++/* ------------------------------------------------------ default-FB readback */
++/* Reads this window's default framebuffer into d->pixels (tight w*h*4) while
++ * preserving/normalizing/restoring the caller's read framebuffer, read buffer,
++ * pack buffer and pack state.  Fail-closed on any adapter GL error or canary
++ * overrun. */
++static void
++t3_readback_default_fb(struct t3_drawable *d, unsigned w, unsigned h)
++{
++    GLint old_fb = 0, old_read_buf = 0, old_pbo = 0;
++    GLint old_align = 0, old_row = 0, old_skip_rows = 0, old_skip_px = 0;
++    GLint old_img_h = 0, old_skip_img = 0, old_lsb = 0, old_swap = 0;
++    size_t need = (size_t)w * h * 4u;
++
++    /* drop any pending app-side errors: they are not ours to attribute */
++    while (glGetError() != GL_NO_ERROR)
++        ;
++
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_fb);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);              /* the window's default FB */
++    glGetIntegerv(GL_READ_BUFFER, &old_read_buf);           /* default-FB context state */
++    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &old_pbo);
++    glGetIntegerv(GL_PACK_ALIGNMENT, &old_align);
++    glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row);
++    glGetIntegerv(GL_PACK_SKIP_ROWS, &old_skip_rows);
++    glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_skip_px);
++    glGetIntegerv(GL_PACK_IMAGE_HEIGHT, &old_img_h);
++    glGetIntegerv(GL_PACK_SKIP_IMAGES, &old_skip_img);
++    glGetIntegerv(GL_PACK_LSB_FIRST, &old_lsb);
++    glGetIntegerv(GL_PACK_SWAP_BYTES, &old_swap);
++
++    /* normalize: CPU destination, tight rows (w*4 is 4-aligned), GL_BACK */
++    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
++    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
++    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
++    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
++    glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
++    glPixelStorei(GL_PACK_SKIP_IMAGES, 0);
++    glPixelStorei(GL_PACK_LSB_FIRST, GL_FALSE);
++    glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
++    glPixelStorei(GL_PACK_ALIGNMENT, 4);
++    glReadBuffer(GL_BACK);
++
++    if (d->gen == 0) {
++        GLint rf = 0, rt = 0;
++        glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &rf);
++        glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, &rt);
++        printf("T3_READ_FORMAT xid=0x%lx format=0x%x type=0x%x old_read_fb=%d\n",
++               (unsigned long)d->xid, (unsigned)rf, (unsigned)rt, (int)old_fb);
++    }
++
++    memset(d->pixels + need, 0xA5, M7G_T3_CANARY);
++    glFinish();
++    glReadPixels(0, 0, (GLsizei)w, (GLsizei)h, GL_RGBA, GL_UNSIGNED_BYTE, d->pixels);
++    if (glGetError() != GL_NO_ERROR)
++        t3_fail("readback-gl-error", 43);
++    for (unsigned i = 0; i < M7G_T3_CANARY; i++) {
++        if (d->pixels[need + i] != 0xA5)
++            t3_fail("readback-overrun-canary", 46);
++    }
++
++    /* restore exactly what the caller had */
++    glPixelStorei(GL_PACK_ALIGNMENT, old_align);
++    glPixelStorei(GL_PACK_ROW_LENGTH, old_row);
++    glPixelStorei(GL_PACK_SKIP_ROWS, old_skip_rows);
++    glPixelStorei(GL_PACK_SKIP_PIXELS, old_skip_px);
++    glPixelStorei(GL_PACK_IMAGE_HEIGHT, old_img_h);
++    glPixelStorei(GL_PACK_SKIP_IMAGES, old_skip_img);
++    glPixelStorei(GL_PACK_LSB_FIRST, old_lsb);
++    glPixelStorei(GL_PACK_SWAP_BYTES, old_swap);
++    if (old_pbo)
++        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)old_pbo);
++    glReadBuffer((GLenum)old_read_buf);          /* still FB 0: legal context state */
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)old_fb);
++    if (glGetError() != GL_NO_ERROR)
++        t3_fail("readback-restore-gl-error", 43);
++}
++
++/* Save the actual already-read CPU transfer bytes, no additional GL/GPU call.
++ * Called under T3's existing mutex. Optional diagnostic, process owner + token
++ * scoped by the private runner. Immutable O_EXCL files; bounded total size. */
++static void
++m9r_capture_frame(const char *kind,XID xid,unsigned w,unsigned h,const unsigned char *pixels)
++{
++    const char *dir=getenv("M9R_T3_FRAME_DIR"),*token=getenv("STEAM_ZINK_TOKEN");
++    if(!dir)return;
++    if(dir[0]!='/' || !token || strlen(token)!=32)t3_fail("frame-config",89);
++    for(unsigned i=0;i<32;i++)if(!((token[i]>='0'&&token[i]<='9')||(token[i]>='a'&&token[i]<='f')||(token[i]>='A'&&token[i]<='F')))t3_fail("frame-token",89);
++    static unsigned count;static size_t total;
++    size_t bytes=(size_t)w*h*4;
++    if(!w||!h||w>4096||h>4096||bytes>4u*1024u*1024u){printf("M9R_FRAME_SKIP size kind=%s w=%u h=%u\n",kind,w,h);return;}
++    if(count>=4||total+bytes>8u*1024u*1024u)return;
++    uint32_t hash=2166136261u;size_t rgb=0,alpha=0;int varied=0;
++    for(size_t i=0;i<bytes;i++){hash=(hash^pixels[i])*16777619u;}
++    for(size_t i=0;i<bytes;i+=4){if(pixels[i]||pixels[i+1]||pixels[i+2])rgb++;if(pixels[i+3])alpha++;if(memcmp(pixels,pixels+i,4))varied=1;}
++    /* Keep first startup frame, then reserve remaining slots for real content. */
++    if(count && (!varied||!rgb))return;
++    int saved=errno;
++    int d=open(dir,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
++    if(d<0)t3_fail("frame-directory",89);
++    char name[128];int n=snprintf(name,sizeof name,"t3-frame.%ld.%u.%s.%ux%u.rgba",(long)getpid(),count,kind,w,h);
++    if(n<1||n>=(int)sizeof name)t3_fail("frame-name",89);
++    int fd=openat(d,name,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);close(d);
++    if(fd<0)t3_fail("frame-open",89);
++    size_t done=0;
++    while(done<bytes){ssize_t rc=write(fd,pixels+done,bytes-done);if(rc<0&&errno==EINTR)continue;if(rc<=0)break;done+=(size_t)rc;}
++    int rc=close(fd);if(done!=bytes||rc)t3_fail("frame-write",89);
++    struct timespec mono,boot,real,raw;clock_gettime(CLOCK_MONOTONIC,&mono);clock_gettime(CLOCK_BOOTTIME,&boot);clock_gettime(CLOCK_REALTIME,&real);clock_gettime(CLOCK_MONOTONIC_RAW,&raw);
++    printf("M9R_FRAME_CAPTURED pid=%ld kind=%s xid=0x%lx file=%s w=%u h=%u bytes=%lu rgb_nonzero=%lu alpha_nonzero=%lu rgba_fnv=0x%08x mono=%ld.%09ld boot=%ld.%09ld raw=%ld.%09ld utc=%ld.%09ld origin=bottom-left\n",
++        (long)getpid(),kind,(unsigned long)xid,name,w,h,(unsigned long)bytes,(unsigned long)rgb,(unsigned long)alpha,hash,
++        (long)mono.tv_sec,mono.tv_nsec,(long)boot.tv_sec,boot.tv_nsec,(long)raw.tv_sec,raw.tv_nsec,(long)real.tv_sec,real.tv_nsec);
++    count++;total+=bytes;errno=saved;
++}
++
++/* M9R opt-in transfer, never a CPU renderer. CEF GPU renders with real Zink;
++ * upload its child-window pixels for CBrowserComposerGL texture_from_pixmap.
++ * Only the browser's final top-level framebuffer uses T3 OPAQUE_FD. */
++static int
++m9r_child_upload_enabled(void)
++{
++    const char *e = getenv("M9R_CEF_CHILD_UPLOAD");
++    if (!e || strcmp(e, "1"))
++        return 0;
++    char args[8192];
++    int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
++    if (fd < 0) t3_fail("child-cmdline-open", 88);
++    ssize_t n = read(fd, args, sizeof(args));
++    close(fd);
++    if (n <= 0 || n == sizeof(args) || args[n-1] != 0)
++        t3_fail("child-cmdline-bounds", 88);
++    for (ssize_t i = 0; i < n; i += strlen(args+i)+1)
++        if (!strcmp(args+i, "--type=gpu-process")) return 1;
++    return 0;
++}
++
++static int
++m9r_checked(xcb_connection_t *c, xcb_void_cookie_t cookie)
++{
++    xcb_generic_error_t *e = xcb_request_check(c, cookie);
++    int ok = !e && !xcb_connection_has_error(c);
++    if (e) {
++        fprintf(stderr,"M9R_CHILD_XERROR code=%u major=%u minor=%u\n",
++                e->error_code,e->major_code,e->minor_code);
++        free(e);
++    }
++    return ok;
++}
++
++/* Required, honest format contract: actual server image byte-order, visual
++ * masks and depth/pixmap-format. No guessed layout or advertised capability. */
++static int
++m9r_child_format(xcb_connection_t *c, xcb_visualid_t vid, unsigned depth)
++{
++    const xcb_setup_t *s = xcb_get_setup(c);
++    if (!s || s->image_byte_order != XCB_IMAGE_ORDER_LSB_FIRST) return 0;
++    int fmt = 0, visual = 0;
++    for (xcb_format_iterator_t f=xcb_setup_pixmap_formats_iterator(s); f.rem; xcb_format_next(&f))
++        if (f.data->depth == depth && f.data->bits_per_pixel == 32 && f.data->scanline_pad == 32) fmt=1;
++    for (xcb_screen_iterator_t sc=xcb_setup_roots_iterator(s); sc.rem; xcb_screen_next(&sc))
++        for (xcb_depth_iterator_t d=xcb_screen_allowed_depths_iterator(sc.data); d.rem; xcb_depth_next(&d))
++            for (xcb_visualtype_iterator_t v=xcb_depth_visuals_iterator(d.data); v.rem; xcb_visualtype_next(&v))
++                if (v.data->visual_id==vid && d.data->depth==depth &&
++                    v.data->_class==XCB_VISUAL_CLASS_TRUE_COLOR &&
++                    v.data->red_mask==0xff0000 && v.data->green_mask==0xff00 && v.data->blue_mask==0xff) visual=1;
++    return fmt && visual && (depth==24 || depth==32);
++}
++
++static void
++m9r_rgba_to_x(uint8_t *dst, const uint8_t *src, unsigned w, unsigned h)
++{
++    for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
++        size_t di=((size_t)y*w+x)*4, si=((size_t)(h-1-y)*w+x)*4;
++        dst[di]=src[si+2];dst[di+1]=src[si+1];dst[di+2]=src[si];dst[di+3]=src[si+3];
++    }
++}
++
++static int
++m9r_child_upload(__GLXDRIdrawable *p)
++{
++    xcb_connection_t *c=XGetXCBConnection(p->psc->dpy);
++    xcb_generic_error_t *err=NULL;
++    xcb_query_tree_reply_t *tree=xcb_query_tree_reply(c,xcb_query_tree(c,p->xDrawable),&err);
++    if (err || !tree) {free(err);free(tree);t3_fail("child-tree",88);}
++    xcb_window_t parent=tree->parent, root=tree->root;
++    free(tree);
++    if (parent==root) return 0; /* Actual top-level still follows accepted T3. */
++    xcb_get_window_attributes_reply_t *attr=xcb_get_window_attributes_reply(c,xcb_get_window_attributes(c,p->xDrawable),&err);
++    if (err || !attr) {free(err);free(attr);t3_fail("child-attributes",88);}
++    xcb_visualid_t vid=attr->visual;unsigned mapped=attr->map_state;
++    free(attr);
++    xcb_get_geometry_reply_t *geo=xcb_get_geometry_reply(c,xcb_get_geometry(c,p->xDrawable),&err);
++    if (err || !geo) {free(err);free(geo);t3_fail("child-geometry",88);}
++    unsigned w=geo->width,h=geo->height,depth=geo->depth;
++    free(geo);
++    if (!w || !h || w>4096 || h>4096 || !m9r_child_format(c,vid,depth))
++        t3_fail("child-format-or-size",88);
++    size_t bytes=(size_t)w*h*4;
++    struct t3_drawable d={.dpy=p->psc->dpy,.xid=p->xDrawable};
++    d.pixels_cap=bytes+M7G_T3_CANARY;d.pixels=malloc(d.pixels_cap);
++    uint8_t *upload=malloc(bytes);
++    if (!d.pixels || !upload) t3_fail("child-allocate",88);
++    pthread_mutex_lock(&t3_lock);
++    t3_readback_default_fb(&d,w,h);
++    m9r_capture_frame("child",d.xid,w,h,d.pixels);
++    m9r_rgba_to_x(upload,d.pixels,w,h);
++    xcb_gcontext_t gc=xcb_generate_id(c);
++    uint32_t values[]={0}; /* graphics_exposures=false */
++    if (!m9r_checked(c,xcb_create_gc_checked(c,gc,p->xDrawable,XCB_GC_GRAPHICS_EXPOSURES,values)))
++        t3_fail("child-create-gc",88);
++    uint32_t max=xcb_get_maximum_request_length(c);
++    /* Conservative core request framing; bounded full rows, no truncation. */
++    unsigned rows=(max>16 ? ((uint64_t)max*4-64)/((uint64_t)w*4) : 0);
++    if (!rows) t3_fail("child-request-size",88);
++    for (unsigned y=0;y<h;) {
++        unsigned count=h-y;if(count>rows)count=rows;
++        if (!m9r_checked(c,xcb_put_image_checked(c,XCB_IMAGE_FORMAT_Z_PIXMAP,p->xDrawable,gc,w,count,0,y,0,depth,(uint32_t)((size_t)count*w*4),upload+(size_t)y*w*4)))
++            t3_fail("child-put-image",88);
++        y+=count;
++    }
++    if (!m9r_checked(c,xcb_free_gc_checked(c,gc))) t3_fail("child-free-gc",88);
++    static unsigned copies;
++    uint32_t hash=2166136261u;
++    for (size_t i=0;i<bytes;i++) hash=(hash^d.pixels[i])*16777619u;
++    if (++copies<=8 || copies%120==0)
++        printf("M9R_CHILD_UPLOAD_OK pid=%ld xid=0x%lx parent=0x%x root=0x%x w=%u h=%u depth=%u mapped=%u count=%u rgba_fnv=0x%08x t_ns=%llu\n",
++               (long)getpid(),(unsigned long)p->xDrawable,parent,root,w,h,depth,mapped,copies,hash,t3_now_ns());
++    free(upload);free(d.pixels);
++    pthread_mutex_unlock(&t3_lock);
++    return 1;
++}
++
++/* ----------------------------------------------------------------- swap */
++int
++m7g_t3_adapter_swap(void *pdraw_ptr, int kopper)
++{
++    __GLXDRIdrawable *pdraw = (__GLXDRIdrawable *)pdraw_ptr;
++    struct glx_context *gc = __glXGetCurrentContext();
++    struct t3_drawable *d = NULL;
++    unsigned w = 0, h = 0;
++    int q;
++    int rc;
++
++    if (!kopper)
++        t3_fail("screen-not-kopper", 40);
++
++    /* real contract: this context current on THIS drawable */
++    if (!gc || gc->currentDpy != pdraw->psc->dpy ||
++        gc->currentDrawable != pdraw->drawable)
++        t3_fail("current-drawable", 44);
++    /* separate read drawable: FBO 0's read side would not be this window */
++    if (gc->currentReadable != pdraw->drawable)
++        t3_fail("current-read-drawable", 45);
++
++    setvbuf(stdout, NULL, _IONBF, 0);
++
++    /* CEF GPU child windows are backing sources for the browser's GL
++     * compositor. They must never take the top-level content override. */
++    if (m9r_child_upload_enabled() && m9r_child_upload(pdraw))
++        return 0;
++
++    pthread_mutex_lock(&t3_lock);
++
++    q = t3_query_window(pdraw->psc->dpy, pdraw->xDrawable, &w, &h);
++    if (q == -1) {
++        pthread_mutex_unlock(&t3_lock);
++        t3_fail("window-query", 41);
++    }
++    if (q == 0) {
++        /* pixmap/unmapped: no presentation for this drawable */
++        if (!t3_nonwindow_logged) {
++            t3_nonwindow_logged = 1;
++            printf("T3_SKIP_NONWINDOW xid=0x%lx (offscreen/pixmap/unmapped; no transport)\n",
++                   (unsigned long)pdraw->xDrawable);
++        }
++        pthread_mutex_unlock(&t3_lock);
++        return 0;
++    }
++
++    for (unsigned i = 0; i < M7G_T3_MAX_DRAWABLES; i++) {
++        if (t3_slots[i].dpy == pdraw->psc->dpy &&
++            t3_slots[i].xid == pdraw->xDrawable) {
++            d = &t3_slots[i];
++            break;
++        }
++    }
++    if (!d) {
++        d = t3_get_free_slot();
++        if (!d) {
++            pthread_mutex_unlock(&t3_lock);
++            t3_fail("drawable-table-full", 40);
++        }
++        memset(d, 0, sizeof(*d));
++        d->dpy = pdraw->psc->dpy;
++        d->xid = pdraw->xDrawable;
++        t3_open_transport(d, w, h);
++        d->open_logged = 1;
++        printf("T3_DRAWABLE xid=0x%lx size=%ux%u\n", (unsigned long)d->xid, w, h);
++    } else {
++        if (w != d->w || h != d->h) {
++            printf("T3_RESIZE xid=0x%lx old=%ux%u new=%ux%u\n",
++                   (unsigned long)d->xid, d->w, d->h, w, h);
++            d->retired_burst = 0;
++            t3_open_transport(d, w, h);
++            d->open_logged = 1;
++        }
++    }
++
++    /* bounded event progress (release/returned/retired/protocol) */
++    rc = m7g_t3_xport_service(d->xp, 0);
++    if (rc != 0) {
++        pthread_mutex_unlock(&t3_lock);
++        t3_fail("service-pre", rc);
++    }
++
++    if (m7g_t3_xport_retired(d->xp)) {
++        /* one bounded recreate attempt per retirement burst */
++        if (d->retired_burst == 0) {
++            d->retired_burst = 1;
++            printf("T3_RETIRED_RECOVER xid=0x%lx gen=%u epoch=%u\n",
++                   (unsigned long)d->xid, d->gen, d->epoch);
++            t3_open_transport(d, w, h);
++        } else {
++            pthread_mutex_unlock(&t3_lock);
++            t3_fail("swapchain-retired", M7G_T3_XS_RETIRED);
++        }
++    }
++
++    t3_readback_default_fb(d, w, h);
++    m9r_capture_frame("final",d->xid,w,h,d->pixels);
++
++    rc = m7g_t3_xport_commit(d->xp, d->gen % 3u, d->gen, d->pixels);
++    if (rc != 0) {
++        pthread_mutex_unlock(&t3_lock);
++        t3_fail("transport-commit", rc);
++    }
++
++    /* progress again so releases/retired arrive during the stream, uniformly */
++    rc = m7g_t3_xport_service(d->xp, 0);
++    if (rc != 0) {
++        pthread_mutex_unlock(&t3_lock);
++        t3_fail("service-post", rc);
++    }
++
++    {
++        unsigned fnv = 2166136261u;
++        size_t n = (size_t)w * h * 4u;
++        for (size_t i = 0; i < n; i++) {
++            fnv ^= d->pixels[i];
++            fnv *= 16777619u;
++        }
++        printf("T3_SWAP xid=0x%lx gen=%u epoch=%u w=%u h=%u t_ns=%llu fnv=0x%08x commit=1\n",
++               (unsigned long)d->xid, d->gen, d->epoch, w, h, t3_now_ns(), fnv);
++    }
++    d->gen++;
++    d->swaps++;
++    d->retired_burst = 0;
++    t3_total_swaps++;
++    pthread_mutex_unlock(&t3_lock);
++    return 0;
++}
++
++/* ------------------------------------------------------------- teardown */
++void
++m7g_t3_adapter_drawable_destroyed(void *pdraw_ptr)
++{
++    __GLXDRIdrawable *pdraw = (__GLXDRIdrawable *)pdraw_ptr;
++    struct t3_drawable *d = NULL;
++
++    pthread_mutex_lock(&t3_lock);
++    for (unsigned i = 0; i < M7G_T3_MAX_DRAWABLES; i++) {
++        if (t3_slots[i].dpy == pdraw->psc->dpy &&
++            t3_slots[i].xid == pdraw->xDrawable) {
++            d = &t3_slots[i];
++            break;
++        }
++    }
++    if (d) {
++        m7g_t3_xport_counters c;
++        int rc;
++        if (d->xp) {
++            rc = m7g_t3_xport_drain(d->xp);
++            if (rc != 0) {
++                pthread_mutex_unlock(&t3_lock);
++                printf("T3_FAIL drain rc=%d\n", rc);
++                _exit(rc);
++            }
++            m7g_t3_xport_get_counters(d->xp, &c);
++            printf("T3_DRAWABLE_DONE xid=0x%lx swaps=%u gen=%u epoch=%u submitted=%u commits=%u releases=%u reuse_waits=%u refresh_cycle=%u past_present=%u retired=%u\n",
++                   (unsigned long)d->xid, d->swaps, d->gen, d->epoch, c.submitted,
++                   c.commits, c.releases, c.reuse_waits, c.refresh_cycle,
++                   c.past_present_timing, c.retired);
++            rc = m7g_t3_xport_destroy(d->xp);
++            d->xp = NULL;
++            if (rc) {
++                pthread_mutex_unlock(&t3_lock);
++                t3_fail("teardown", rc);
++            }
++        }
++        free(d->pixels);
++        memset(d, 0, sizeof(*d));
++    }
++    printf("T3_TOTAL swaps=%u\n", t3_total_swaps);
++    pthread_mutex_unlock(&t3_lock);
++}
+diff --git a/src/glx/m7g-t3/m7g_t3_adapter.h b/src/glx/m7g-t3/m7g_t3_adapter.h
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/m7g_t3_adapter.h
+@@ -0,0 +1,42 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* M7g T3 — private Steam-compatibility GLX/drisw/Zink presentation adapter.
++ *
++ * Interface between the env-gated hooks in src/glx/drisw_glx.c and the adapter
++ * implementation (both in the private libGLX_mesa build).  Enabled only by
++ * M7G_T3_ADAPTER=1.
++ *
++ * Difference from the frozen T2 proof adapter: arbitrary real pixels (no
++ * pattern/FNV table, no frame cap, no artificial pacing/hold), multiple window
++ * drawables per process, per-drawable transport bound to the real XID, resize
++ * via bounded transport recreation, and honest fail-closed behavior for
++ * unsupported cases.  The transport contract itself is unchanged.
++ */
++#ifndef M7G_T3_ADAPTER_H
++#define M7G_T3_ADAPTER_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Called from driswSwapBuffers() for a drawable when the adapter is enabled.
++ * `kopper != 0` means the private zink/kopper screen is active.  For window
++ * drawables: read the current default framebuffer and deliver it through the
++ * qualified OPAQUE_FD transport + override for this XID (creating/recreating
++ * the per-drawable transport as needed).  For non-window drawables: no
++ * transport (pixmap/pbuffer content has no presentation).
++ * On adapter/transport failure: "T3_FAIL stage=... rc=..." and _exit(rc)
++ * (fail-closed).
++ */
++int m7g_t3_adapter_swap(void *pdraw, int kopper);
++
++/* Called from driswDestroyDrawable() before the DRI drawable is destroyed.
++ * Drains and tears down the per-drawable transport with the accepted
++ * fail-closed semantics (rc28 if not provably safe).
++ */
++void m7g_t3_adapter_drawable_destroyed(void *pdraw);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* M7G_T3_ADAPTER_H */
+diff --git a/src/glx/m7g-t3/m7g_t3_transport.h b/src/glx/m7g-t3/m7g_t3_transport.h
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/m7g_t3_transport.h
+@@ -0,0 +1,62 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* M7g T3 — transport interface (generalized from the accepted T1/T2 OPAQUE_FD
++ * transport; see tools/m7g-zink-t3/mesa-overlay/.../m7g_t3_transport_vk.c).
++ *
++ * Contract kept: immutable slots, exported OPAQUE_FD memory, ready/returned
++ * binary semaphores, external ownership barriers, bounded reuse, fail-closed
++ * teardown.  Change for T3: the per-instance drawable SIZE is a parameter
++ * (arbitrary real windows), not a fixed 1280x720 proof size.
++ */
++#pragma once
++
++#include <stdint.h>
++
++typedef struct m7g_t3_xport m7g_t3_xport;
++
++typedef struct {
++    unsigned slots;       /* registered immutable slots */
++    unsigned submitted;   /* generations submitted (ready signaled) */
++    unsigned commits;     /* wl_surface attach+damage+commit */
++    unsigned releases;    /* wl_buffer.release events observed (client-visible) */
++    unsigned reuse_waits; /* bounded slot-reuse waits performed */
++    unsigned refresh_cycle;        /* gamescope_swapchain.refresh_cycle events */
++    unsigned past_present_timing;  /* gamescope_swapchain.past_present_timing events */
++    unsigned retired;              /* gamescope_swapchain.retired events */
++} m7g_t3_xport_counters;
++
++/* failure stage codes: identical numbers to the accepted T1/T2 transport */
++enum {
++    M7G_T3_XS_INIT = 20,   /* wayland connect / bridge Vulkan init */
++    M7G_T3_XS_BIND = 21,   /* missing compositor/factory/manager globals */
++    M7G_T3_XS_STAGE = 22,  /* surface/create_swapchain/override protocol error */
++    M7G_T3_XS_SLOTS = 23,  /* slot registration rejected / export unsupported */
++    M7G_T3_XS_UPLOAD = 24, /* staging upload / gpu copy / submit failed */
++    M7G_T3_XS_REUSE = 25,  /* bounded slot-reuse wait failed (no in-flight reuse) */
++    M7G_T3_XS_COMMIT = 26, /* attach/damage/commit/flush failed */
++    M7G_T3_XS_TEARDOWN = 28, /* teardown not provably safe: resources left to exit */
++    M7G_T3_XS_RETIRED = 29,  /* swapchain retired while generations still to send */
++    M7G_T3_XS_DRAIN = 30,    /* flush/dispatch/drain/service error */
++};
++
++int  m7g_t3_xport_init(m7g_t3_xport **out, uint32_t server_id, uint32_t xid,
++                       uint32_t w, uint32_t h);
++int  m7g_t3_xport_commit(m7g_t3_xport *x, unsigned slot, unsigned gen, const unsigned char *pixels);
++int  m7g_t3_xport_service(m7g_t3_xport *x, int timeout_ms);  /* bounded event pump */
++int  m7g_t3_xport_drain(m7g_t3_xport *x);                    /* flush+roundtrip, exact FAIL */
++int  m7g_t3_xport_retired(const m7g_t3_xport *x);
++void m7g_t3_xport_get_counters(const m7g_t3_xport *x, m7g_t3_xport_counters *c);
++int  m7g_t3_xport_destroy(m7g_t3_xport *x);                  /* 0 clean; nonzero = unsafe */
++const char *m7g_t3_xport_backend(void);
++uint32_t m7g_t3_xport_w(const m7g_t3_xport *x);
++uint32_t m7g_t3_xport_h(const m7g_t3_xport *x);
++
++/* Pure poll-result verdict for the service pump (same as T1/T2).
++ * POLLIN=0x001, POLLERR=0x008, POLLHUP=0x010, POLLNVAL=0x020, EINTR=4. */
++static inline int m7g_t3_poll_verdict(int pr, short revents, int err)
++{
++    if (pr < 0)
++        return err == 4 ? 0 : M7G_T3_XS_DRAIN;
++    if (pr > 0 && (revents & (short)(0x008 | 0x010 | 0x020)))
++        return M7G_T3_XS_DRAIN;
++    return 0;
++}
+diff --git a/src/glx/m7g-t3/m7g_t3_transport_stub.c b/src/glx/m7g-t3/m7g_t3_transport_stub.c
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/m7g_t3_transport_stub.c
+@@ -0,0 +1,188 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* M7g T3 — stub transport backend (test-only; never linked into the
++ * shipped ELF; generalized from the T2 stub: symbol/log prefix plus
++ * per-instance size parameters; same orchestration surface).
++ *
++ * Exercises the client orchestration, counters and failure injection without
++ * Wayland/Vulkan.  Compiled only with -DM7G_TEST_HOOKS.
++ */
++#include "m7g_t3_transport.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++struct m7g_t3_xport {
++    unsigned frames;
++    unsigned slots;
++    uint32_t w;
++    uint32_t h;
++    uint32_t bytes;
++    m7g_t3_xport_counters c;
++    unsigned magic;
++    int retired;
++    long retired_after_gen; /* -1 = never */
++    unsigned service_calls;
++    unsigned pending_events;
++    unsigned require_service;
++};
++
++static int t3_retired_fired; /* one-shot injected retirement across instances */
++
++static int fail_at(const char *stage)
++{
++#ifdef M7G_TEST_HOOKS
++    const char *e = getenv("M7G_TEST_FAIL_AT");
++    if (e && *e && strcmp(e, stage) == 0) {
++        printf("T3_TEST fail_at=%s (injected)\n", stage);
++        return 1;
++    }
++#else
++    (void)stage;
++#endif
++    return 0;
++}
++
++const char *m7g_t3_xport_backend(void)
++{
++    return "stub";
++}
++uint32_t m7g_t3_xport_w(const m7g_t3_xport *x) { return x ? x->w : 0; }
++uint32_t m7g_t3_xport_h(const m7g_t3_xport *x) { return x ? x->h : 0; }
++
++int m7g_t3_xport_init(m7g_t3_xport **out, uint32_t server_id, uint32_t xid,
++                      uint32_t w, uint32_t h)
++{
++    struct m7g_t3_xport *x;
++    printf("T3_XPORT backend=stub server_id=%u xid=0x%x w=%u h=%u\n", server_id, xid, w, h);
++    if (fail_at("init"))
++        return M7G_T3_XS_INIT;
++    x = calloc(1, sizeof(*x));
++    if (!x)
++        return M7G_T3_XS_INIT;
++    x->frames = 0; /* frames come from the T2 adapter scenario */
++    x->slots = 3;
++    x->w = w;
++    x->h = h;
++    x->bytes = w * h * 4u;
++    x->magic = 0x7b1u;
++    x->retired_after_gen = -1;
++    x->require_service = 1; /* T3: the stream must service queued events */
++    x->c.slots = x->slots;
++#ifdef M7G_TEST_HOOKS
++    {
++        const char *r = getenv("M7G_TEST_RETIRED_AFTER");
++        if (r && *r)
++            x->retired_after_gen = strtol(r, NULL, 10);
++        r = getenv("M7G_T3_STUB_REQUIRE_SERVICE");
++        if (r && *r)
++            x->require_service = (strtol(r, NULL, 10) != 0);
++        if (t3_retired_fired)
++            x->retired_after_gen = -1; /* the injected retirement is one-shot */
++    }
++#endif
++    printf("T3_XPORT stub slot count=3 (fake register)\n");
++    *out = x;
++    return 0;
++}
++
++int m7g_t3_xport_commit(m7g_t3_xport *x, unsigned slot, unsigned gen, const unsigned char *pixels)
++{
++    if (!x || x->magic != 0x7b1u)
++        return M7G_T3_XS_UPLOAD;
++    if (slot >= x->slots)
++        return M7G_T3_XS_UPLOAD;
++    if (x->retired) {
++        printf("T3_TEST swapchain-retired (injected state)\n");
++        return M7G_T3_XS_RETIRED;
++    }
++    if (gen > 0 && (gen % x->slots) == 0)
++        x->c.reuse_waits++;
++    /* T3: queued events (release/retired/protocol) must be dispatched by
++     * service() between generations; otherwise this is not event-progressing. */
++    if (x->require_service && x->pending_events > 0) {
++        printf("T3_TEST stub commit-blocked gen=%u pending_events=%u (service required)\n",
++               gen, x->pending_events);
++        return M7G_T3_XS_REUSE;
++    }
++    if (fail_at("upload"))
++        return M7G_T3_XS_UPLOAD;
++    if (fail_at("reuse"))
++        return M7G_T3_XS_REUSE;
++    if (fail_at("commit"))
++        return M7G_T3_XS_COMMIT;
++    /* Deterministic stub-side content fingerprint (no assumptions about the
++     * real transport; lets local smoke verify the producer->commit handoff). */
++    {
++        unsigned h = 2166136261u;
++        for (uint32_t i = 0; i < x->bytes; i++) {
++            h ^= pixels[i];
++            h *= 16777619u;
++        }
++        printf("T3_XPORT stub commit gen=%u slot=%u w=%u h=%u fnv=0x%08x\n",
++               gen, slot, x->w, x->h, h);
++    }
++    x->c.submitted++;
++    x->c.commits++;
++    x->pending_events++; /* one queued event per generation; service() dispatches it */
++    if (x->retired_after_gen >= 0 && (long)gen >= x->retired_after_gen) {
++        x->retired = 1;
++        t3_retired_fired = 1;
++    }
++    return 0;
++}
++
++int m7g_t3_xport_service(m7g_t3_xport *x, int timeout_ms)
++{
++    if (fail_at("service"))
++        return M7G_T3_XS_DRAIN;
++    if (!x)
++        return 0;
++    x->service_calls++;
++    /* timeout_ms == 0 is the no-pacing per-swap progress call: dispatch all
++     * queued events without sleeping.  A positive timeout models a bounded
++     * wait (short sleep), like the real poll-based service. */
++    if (timeout_ms > 0) {
++        struct timespec ts = { 0, (long)timeout_ms * 1000 * 1000 };
++        nanosleep(&ts, NULL);
++    }
++    if (x->pending_events) {
++        printf("T3_TEST stub service dispatched=%u (releases=%u)\n",
++               x->pending_events, x->c.releases + x->pending_events);
++        x->c.releases += x->pending_events;
++        x->pending_events = 0;
++    }
++    return 0;
++}
++
++int m7g_t3_xport_drain(m7g_t3_xport *x)
++{
++    (void)x;
++    if (fail_at("drain"))
++        return M7G_T3_XS_DRAIN;
++    return 0;
++}
++
++int m7g_t3_xport_retired(const m7g_t3_xport *x)
++{
++    return x ? x->retired : 0;
++}
++
++void m7g_t3_xport_get_counters(const m7g_t3_xport *x, m7g_t3_xport_counters *c)
++{
++    *c = x->c;
++}
++
++int m7g_t3_xport_destroy(m7g_t3_xport *x)
++{
++    if (!x)
++        return 0;
++    printf("T3_TEST service_calls=%u\n", x->service_calls);
++    if (fail_at("teardown")) {
++        printf("T3_TEARDOWN_UNSAFE resources-left-to-process-exit=1 (stub injection)\n");
++        return M7G_T3_XS_TEARDOWN;
++    }
++    free(x);
++    return 0;
++}
+diff --git a/src/glx/m7g-t3/m7g_t3_transport_vk.c b/src/glx/m7g-t3/m7g_t3_transport_vk.c
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/m7g_t3_transport_vk.c
+@@ -0,0 +1,826 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* M7g T3 — real transport backend (generalized from the accepted T2/T1
++ * OPAQUE_FD transport; ONLY the symbol/log prefix and per-instance SIZE
++ * parameterization differ: slots/staging/register_buffer use the actual
++ * drawable w/h instead of a fixed 1280x720.  The slot/ready/returned/
++ * external-ownership/lifetime/backpressure contract is unchanged).
++ *
++ * Producer bridge: CPU pixels (Zink FBO readback, machine-checked) are copied
++ * into a per-slot host-visible staging buffer, then copied on the bridge
++ * VkDevice/queue into the accepted-exportable OPAQUE_FD VkBuffer slot (exact
++ * reference-client pattern: immutable registration, exported memory +
++ * ready/returned binary semaphores, external ownership barriers, bounded
++ * reuse, release after copy fence on the compositor side).
++ *
++ * No client NVIDIA WSI anywhere: no VkSurface/swapchain/present; the only
++ * Wayland objects are the wl_surface carrying transport buffers and the
++ * gamescope swapchain/override handles.
++ */
++#include "m7g_t3_transport.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdbool.h>
++#include <unistd.h>
++#include <errno.h>
++#include <poll.h>
++
++#include <vulkan/vulkan.h>
++#include <wayland-client.h>
++
++#include "gamescope-swapchain-client-protocol.h"
++#include "tegra-l4t-buffer-client-protocol.h"
++
++#define M7G_T3_SLOTS 3u
++#define M7G_T3_FENCE_WAIT_NS (3000000000ull)
++#define M7G_T3_DRM_FORMAT_ABGR8888 0x34324241u /* DRM_FORMAT_ABGR8888 */
++
++struct t1_slot {
++    VkBuffer        buffer;
++    VkDeviceMemory  bufferMem;
++    uint32_t        allocSize;
++    uint32_t        memoryTypeIndex;
++    uint32_t        memoryTypeBits;
++    uint32_t        memoryPropertyFlags;
++    uint32_t        dedicated;
++    VkBuffer        staging;
++    VkDeviceMemory  stagingMem;
++    unsigned char  *stagingMap;
++    VkSemaphore     ready;
++    VkSemaphore     returned;
++    VkFence         fence;
++    VkCommandBuffer cmd;
++    struct wl_buffer *wlBuffer;
++    int             memFd;
++    int             readyFd;
++    int             returnedFd;
++    bool            usedOnce;
++};
++
++struct m7g_t3_xport {
++    struct wl_display                    *display;
++    struct wl_registry                   *registry;
++    struct wl_compositor                 *compositor;
++    struct gamescope_swapchain_factory_v2 *factory;
++    struct tegra_l4t_buffer_manager      *manager;
++    struct wl_surface                    *surface;
++    struct gamescope_swapchain           *swapchain;
++
++    VkInstance       instance;
++    VkPhysicalDevice phys;
++    VkDevice         device;
++    VkQueue          queue;
++    uint32_t         qfam;
++    uint32_t         bridge_device_index;
++    char             device_name[256];
++    uint8_t          deviceUuid[16];
++    uint8_t          driverUuid[16];
++    VkPhysicalDeviceMemoryProperties memProps;
++    PFN_vkGetMemoryFdKHR    getMemoryFd;
++    PFN_vkGetSemaphoreFdKHR getSemaphoreFd;
++    VkCommandPool    pool;
++
++    struct t1_slot   slot[M7G_T3_SLOTS];
++    unsigned         slotCount;
++    unsigned         nextSlot;
++    uint32_t         xid;
++    uint32_t         server_id;
++    uint32_t         w;
++    uint32_t         h;
++    uint32_t         bytes;
++    int              retired;
++    m7g_t3_xport_counters c;
++};
++
++const char *m7g_t3_xport_backend(void) { return "opaque_fd"; }
++uint32_t m7g_t3_xport_w(const m7g_t3_xport *x) { return x ? x->w : 0; }
++uint32_t m7g_t3_xport_h(const m7g_t3_xport *x) { return x ? x->h : 0; }
++
++/* ------------------------------------------------------------------ helpers */
++static bool choose_memory(const struct m7g_t3_xport *x, uint32_t typeBits,
++                          VkMemoryPropertyFlags want, uint32_t *out)
++{
++    for (uint32_t i = 0; i < x->memProps.memoryTypeCount; i++)
++        if ((typeBits & (1u << i)) &&
++            (x->memProps.memoryTypes[i].propertyFlags & want) == want) {
++            *out = i;
++            return true;
++        }
++    return false;
++}
++
++#ifdef M7G_TEST_HOOKS
++static int fail_at(const char *stage)
++{
++    const char *e = getenv("M7G_TEST_FAIL_AT");
++    if (e && *e && strcmp(e, stage) == 0) {
++        printf("T3_TEST fail_at=%s (injected)\n", stage);
++        return 1;
++    }
++    return 0;
++}
++#endif
++
++/* ------------------------------------------------------- swapchain events */
++static void sc_past_present(void *data, struct gamescope_swapchain *sc,
++                            uint32_t present_id,
++                            uint32_t desired_hi, uint32_t desired_lo,
++                            uint32_t actual_hi, uint32_t actual_lo,
++                            uint32_t earliest_hi, uint32_t earliest_lo,
++                            uint32_t margin_hi, uint32_t margin_lo)
++{
++    struct m7g_t3_xport *x = data;
++    (void)sc;
++    x->c.past_present_timing++;
++    printf("T3_SC past_present id=%u desired=%llu actual=%llu earliest=%llu margin=%llu\n",
++           present_id,
++           (unsigned long long)(((uint64_t)desired_hi << 32) | desired_lo),
++           (unsigned long long)(((uint64_t)actual_hi << 32) | actual_lo),
++           (unsigned long long)(((uint64_t)earliest_hi << 32) | earliest_lo),
++           (unsigned long long)(((uint64_t)margin_hi << 32) | margin_lo));
++}
++static void sc_refresh_cycle(void *data, struct gamescope_swapchain *sc,
++                             uint32_t hi, uint32_t lo)
++{
++    struct m7g_t3_xport *x = data;
++    (void)sc;
++    x->c.refresh_cycle++;
++    printf("T3_SC refresh_cycle=%llu\n",
++           (unsigned long long)(((uint64_t)hi << 32) | lo));
++}
++static void sc_retired(void *data, struct gamescope_swapchain *sc)
++{
++    struct m7g_t3_xport *x = data;
++    (void)sc;
++    x->retired = 1;
++    x->c.retired++;
++    printf("T3_SC retired=1 (swapchain remotely retired; no further commits)\n");
++}
++static const struct gamescope_swapchain_listener sc_listener = {
++    .past_present_timing = sc_past_present,
++    .refresh_cycle = sc_refresh_cycle,
++    .retired = sc_retired,
++};
++
++/* ------------------------------------------------------------- wayland in */
++static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
++                            const char *iface, uint32_t version)
++{
++    struct m7g_t3_xport *x = data;
++    if (strcmp(iface, wl_compositor_interface.name) == 0 && !x->compositor)
++        x->compositor = wl_registry_bind(reg, name, &wl_compositor_interface,
++                                         version < 4u ? version : 4u);
++    else if (strcmp(iface, gamescope_swapchain_factory_v2_interface.name) == 0 && !x->factory)
++        x->factory = wl_registry_bind(reg, name, &gamescope_swapchain_factory_v2_interface, 1u);
++    else if (strcmp(iface, tegra_l4t_buffer_manager_interface.name) == 0 && !x->manager)
++        x->manager = wl_registry_bind(reg, name, &tegra_l4t_buffer_manager_interface, 1u);
++}
++static void registry_global_remove(void *data, struct wl_registry *reg, uint32_t name)
++{ (void)data; (void)reg; (void)name; }
++static const struct wl_registry_listener registry_listener = {
++    .global = registry_global, .global_remove = registry_global_remove,
++};
++
++/* --------------------------------------------------------------- vk bridge */
++static int vk_bridge_init(struct m7g_t3_xport *x)
++{
++    VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
++    app.pApplicationName = "m7g-zink-t3";
++    app.apiVersion = VK_API_VERSION_1_1;
++    VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
++    ici.pApplicationInfo = &app;
++    if (vkCreateInstance(&ici, NULL, &x->instance) != VK_SUCCESS) {
++        printf("T3_FAIL vk-instance\n");
++        return M7G_T3_XS_INIT;
++    }
++    uint32_t n = 0;
++    if (vkEnumeratePhysicalDevices(x->instance, &n, NULL) != VK_SUCCESS || n == 0) {
++        printf("T3_FAIL vk-no-devices\n");
++        return M7G_T3_XS_INIT;
++    }
++    VkPhysicalDevice devs[8];
++    uint32_t want = n < 8u ? n : 8u;
++    if (vkEnumeratePhysicalDevices(x->instance, &want, devs) != VK_SUCCESS || want == 0) {
++        printf("T3_FAIL vk-enum-devices\n");
++        return M7G_T3_XS_INIT;
++    }
++    x->phys = devs[0];
++    x->bridge_device_index = 0;
++
++    VkPhysicalDeviceIDProperties idProp = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
++    VkPhysicalDeviceProperties2 props2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
++    props2.pNext = &idProp;
++    vkGetPhysicalDeviceProperties2(x->phys, &props2);
++    memcpy(x->deviceUuid, idProp.deviceUUID, 16);
++    memcpy(x->driverUuid, idProp.driverUUID, 16);
++    snprintf(x->device_name, sizeof(x->device_name), "%s", props2.properties.deviceName);
++    vkGetPhysicalDeviceMemoryProperties(x->phys, &x->memProps);
++
++    uint32_t qn = 0;
++    vkGetPhysicalDeviceQueueFamilyProperties(x->phys, &qn, NULL);
++    VkQueueFamilyProperties qp[16];
++    uint32_t qwant = qn < 16u ? qn : 16u;
++    vkGetPhysicalDeviceQueueFamilyProperties(x->phys, &qwant, qp);
++    bool found = false;
++    for (uint32_t i = 0; i < qwant; i++)
++        if (qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) { x->qfam = i; found = true; break; }
++    if (!found) {
++        printf("T3_FAIL vk-no-graphics-queue\n");
++        return M7G_T3_XS_INIT;
++    }
++
++    const char *extNeed[2] = { VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
++                               VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME };
++    uint32_t en = 0;
++    if (vkEnumerateDeviceExtensionProperties(x->phys, NULL, &en, NULL) != VK_SUCCESS || en == 0) {
++        printf("T3_FAIL vk-ext-enum\n");
++        return M7G_T3_XS_INIT;
++    }
++    VkExtensionProperties exts[512];
++    uint32_t ew = en < 512u ? en : 512u;
++    vkEnumerateDeviceExtensionProperties(x->phys, NULL, &ew, exts);
++    for (unsigned k = 0; k < 2; k++) {
++        bool have = false;
++        for (uint32_t i = 0; i < ew; i++)
++            if (strcmp(exts[i].extensionName, extNeed[k]) == 0) { have = true; break; }
++        if (!have) {
++            printf("T3_FAIL vk-ext-missing %s\n", extNeed[k]);
++            return M7G_T3_XS_INIT;
++        }
++    }
++
++    float prio = 1.0f;
++    VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
++    qci.queueFamilyIndex = x->qfam;
++    qci.queueCount = 1;
++    qci.pQueuePriorities = &prio;
++    VkPhysicalDeviceFeatures feats;
++    memset(&feats, 0, sizeof(feats));
++    VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
++    dci.queueCreateInfoCount = 1;
++    dci.pQueueCreateInfos = &qci;
++    dci.pEnabledFeatures = &feats;
++    dci.enabledExtensionCount = 2;
++    dci.ppEnabledExtensionNames = extNeed;
++    if (vkCreateDevice(x->phys, &dci, NULL, &x->device) != VK_SUCCESS) {
++        printf("T3_FAIL vk-device\n");
++        return M7G_T3_XS_INIT;
++    }
++    vkGetDeviceQueue(x->device, x->qfam, 0, &x->queue);
++    x->getMemoryFd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(x->device, "vkGetMemoryFdKHR");
++    x->getSemaphoreFd = (PFN_vkGetSemaphoreFdKHR)vkGetDeviceProcAddr(x->device, "vkGetSemaphoreFdKHR");
++    if (!x->getMemoryFd || !x->getSemaphoreFd) {
++        printf("T3_FAIL vk-ext-entrypoints\n");
++        return M7G_T3_XS_INIT;
++    }
++
++    VkCommandPoolCreateInfo cp = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
++    cp.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
++    cp.queueFamilyIndex = x->qfam;
++    if (vkCreateCommandPool(x->device, &cp, NULL, &x->pool) != VK_SUCCESS) {
++        printf("T3_FAIL vk-cmd-pool\n");
++        return M7G_T3_XS_INIT;
++    }
++
++    printf("T3_BRIDGE device_index=%u device=\"%s\" qfam=%u\n",
++           x->bridge_device_index, x->device_name, x->qfam);
++    printf("T3_BRIDGE device_uuid=");
++    for (int i = 0; i < 16; i++) printf("%02x", x->deviceUuid[i]);
++    printf(" driver_uuid=");
++    for (int i = 0; i < 16; i++) printf("%02x", x->driverUuid[i]);
++    printf("\n");
++    return 0;
++}
++
++/* ------------------------------------------------------------------- slots */
++static void buf_release(void *data, struct wl_buffer *wl_buffer)
++{
++    struct m7g_t3_xport *x = data;
++    (void)wl_buffer;
++    x->c.releases++;
++    printf("T3_RELEASE count=%u\n", x->c.releases);
++}
++static const struct wl_buffer_listener buf_listener = { .release = buf_release };
++
++static int slot_create(struct m7g_t3_xport *x, unsigned i)
++{
++    struct t1_slot *s = &x->slot[i];
++    const uint32_t usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
++    VkResult res;
++
++    VkPhysicalDeviceExternalBufferInfo ebi = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO };
++    ebi.usage = usage;
++    ebi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
++    VkExternalBufferProperties eprops = { VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES };
++    vkGetPhysicalDeviceExternalBufferProperties(x->phys, &ebi, &eprops);
++    VkExternalMemoryFeatureFlags ef = eprops.externalMemoryProperties.externalMemoryFeatures;
++    if (!(ef & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) {
++        printf("T3_FAIL slot%u export-unsupported\n", i);
++        return M7G_T3_XS_SLOTS;
++    }
++    const bool extDedicatedOnly = (ef & VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT) != 0;
++
++    VkExternalMemoryBufferCreateInfo ext = { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO };
++    ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
++    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
++    bci.pNext = &ext;
++    bci.size = x->bytes;
++    bci.usage = usage;
++    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++    if ((res = vkCreateBuffer(x->device, &bci, NULL, &s->buffer)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u create-buffer res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++
++    VkBufferMemoryRequirementsInfo2 ri = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2 };
++    ri.buffer = s->buffer;
++    VkMemoryDedicatedRequirements mdr = { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS };
++    VkMemoryRequirements2 mr2 = { VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2 };
++    mr2.pNext = &mdr;
++    vkGetBufferMemoryRequirements2(x->device, &ri, &mr2);
++    const bool dedicated = mdr.requiresDedicatedAllocation || extDedicatedOnly;
++    if (!choose_memory(x, mr2.memoryRequirements.memoryTypeBits,
++                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &s->memoryTypeIndex)) {
++        printf("T3_FAIL slot%u no-device-local-type\n", i);
++        return M7G_T3_XS_SLOTS;
++    }
++    s->allocSize = (uint32_t)mr2.memoryRequirements.size;
++    s->memoryTypeBits = mr2.memoryRequirements.memoryTypeBits;
++    s->memoryPropertyFlags = x->memProps.memoryTypes[s->memoryTypeIndex].propertyFlags;
++    s->dedicated = dedicated ? 1u : 0u;
++
++    VkExportMemoryAllocateInfo exa = { VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO };
++    exa.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
++    VkMemoryDedicatedAllocateInfo mda = { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
++    mda.buffer = s->buffer;
++    if (dedicated)
++        exa.pNext = &mda;
++    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
++    mai.pNext = &exa;
++    mai.allocationSize = s->allocSize;
++    mai.memoryTypeIndex = s->memoryTypeIndex;
++    if ((res = vkAllocateMemory(x->device, &mai, NULL, &s->bufferMem)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u alloc res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++    if ((res = vkBindBufferMemory(x->device, s->buffer, s->bufferMem, 0)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u bind res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++    VkMemoryGetFdInfoKHR gfi = { VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR };
++    gfi.memory = s->bufferMem;
++    gfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
++    if (x->getMemoryFd(x->device, &gfi, &s->memFd) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u get-mem-fd\n", i);
++        return M7G_T3_XS_SLOTS;
++    }
++
++    /* staging (host-visible, not exported): the only CPU-write target */
++    VkBufferCreateInfo sci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
++    sci.size = x->bytes;
++    sci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
++    sci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++    if ((res = vkCreateBuffer(x->device, &sci, NULL, &s->staging)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u staging res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++    VkMemoryRequirements sr;
++    vkGetBufferMemoryRequirements(x->device, s->staging, &sr);
++    uint32_t sti = 0;
++    if (!choose_memory(x, sr.memoryTypeBits,
++                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &sti)) {
++        printf("T3_FAIL slot%u no-host-visible-type\n", i);
++        return M7G_T3_XS_SLOTS;
++    }
++    VkMemoryAllocateInfo smai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
++    smai.allocationSize = sr.size;
++    smai.memoryTypeIndex = sti;
++    if ((res = vkAllocateMemory(x->device, &smai, NULL, &s->stagingMem)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u staging-alloc res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++    if ((res = vkBindBufferMemory(x->device, s->staging, s->stagingMem, 0)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u staging-bind res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++    if ((res = vkMapMemory(x->device, s->stagingMem, 0, VK_WHOLE_SIZE, 0, (void **)&s->stagingMap)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u staging-map res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++
++    /* ready/returned binary semaphores, exported OPAQUE_FD */
++    for (int k = 0; k < 2; k++) {
++        VkExportSemaphoreCreateInfo esc = { VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO };
++        esc.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
++        VkSemaphoreCreateInfo semci = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
++        semci.pNext = &esc;
++        VkSemaphore sem = VK_NULL_HANDLE;
++        if ((res = vkCreateSemaphore(x->device, &semci, NULL, &sem)) != VK_SUCCESS) {
++            printf("T3_FAIL slot%u semaphore res=%d\n", i, (int)res);
++            return M7G_T3_XS_SLOTS;
++        }
++        VkSemaphoreGetFdInfoKHR sgfi = { VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR };
++        sgfi.semaphore = sem;
++        sgfi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
++        int fd = -1;
++        if (x->getSemaphoreFd(x->device, &sgfi, &fd) != VK_SUCCESS) {
++            printf("T3_FAIL slot%u semaphore-fd\n", i);
++            return M7G_T3_XS_SLOTS;
++        }
++        if (k == 0) { s->ready = sem; s->readyFd = fd; }
++        else        { s->returned = sem; s->returnedFd = fd; }
++    }
++    VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
++    if ((res = vkCreateFence(x->device, &fci, NULL, &s->fence)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u fence res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++    VkCommandBufferAllocateInfo cai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
++    cai.commandPool = x->pool;
++    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++    cai.commandBufferCount = 1;
++    if ((res = vkAllocateCommandBuffers(x->device, &cai, &s->cmd)) != VK_SUCCESS) {
++        printf("T3_FAIL slot%u cmd res=%d\n", i, (int)res);
++        return M7G_T3_XS_SLOTS;
++    }
++
++    struct wl_array devUuid, drvUuid;
++    wl_array_init(&devUuid);
++    wl_array_init(&drvUuid);
++    memcpy(wl_array_add(&devUuid, 16), x->deviceUuid, 16);
++    memcpy(wl_array_add(&drvUuid, 16), x->driverUuid, 16);
++    s->wlBuffer = tegra_l4t_buffer_manager_register_buffer(
++        x->manager, (int32_t)x->w, (int32_t)x->h, M7G_T3_DRM_FORMAT_ABGR8888,
++        x->bytes, usage, 0u, s->allocSize, s->memoryTypeIndex,
++        s->memoryTypeBits, s->memoryPropertyFlags, s->dedicated,
++        &devUuid, &drvUuid, s->memFd, s->readyFd, s->returnedFd);
++    wl_array_release(&devUuid);
++    wl_array_release(&drvUuid);
++    if (!s->wlBuffer) {
++        printf("T3_FAIL slot%u register-null\n", i);
++        return M7G_T3_XS_SLOTS;
++    }
++    wl_buffer_add_listener(s->wlBuffer, &buf_listener, x);
++    printf("T3_SLOT idx=%u alloc=%u mt=%u bits=0x%x mpf=0x%x ded=%u memFd=%d readyFd=%d returnedFd=%d\n",
++           i, s->allocSize, s->memoryTypeIndex, s->memoryTypeBits, s->memoryPropertyFlags,
++           s->dedicated, s->memFd, s->readyFd, s->returnedFd);
++    return 0;
++}
++
++/* -------------------------------------------------------------------- init */
++int m7g_t3_xport_init(m7g_t3_xport **out, uint32_t server_id, uint32_t xid,
++                      uint32_t w, uint32_t h)
++{
++    if (w < 16u || h < 16u || w > 4096u || h > 4096u ||
++        (uint64_t)w * (uint64_t)h * 4ull > (64ull << 20)) {
++        printf("T3_FAIL drawable-size-unsupported w=%u h=%u\n", w, h);
++        return M7G_T3_XS_INIT;
++    }
++    struct m7g_t3_xport *x = calloc(1, sizeof(*x));
++    if (!x)
++        return M7G_T3_XS_INIT;
++    x->slotCount = M7G_T3_SLOTS;
++    x->xid = xid;
++    x->w = w;
++    x->h = h;
++    x->bytes = w * h * 4u;
++    x->server_id = server_id;
++    int rc;
++
++    const char *name = getenv("GAMESCOPE_WAYLAND_DISPLAY");
++    if (!name || !*name)
++        name = getenv("WAYLAND_DISPLAY");
++    if (!name || !*name) {
++        printf("T3_FAIL wayland-display-env-missing (GAMESCOPE_WAYLAND_DISPLAY/WAYLAND_DISPLAY)\n");
++        rc = M7G_T3_XS_INIT;
++        goto fail;
++    }
++    x->display = wl_display_connect(name);
++    if (!x->display) {
++        printf("T3_FAIL wl_display_connect name=%s\n", name);
++        rc = M7G_T3_XS_INIT;
++        goto fail;
++    }
++    printf("T3_WL display=%s ok=1\n", name);
++
++#ifdef M7G_TEST_HOOKS
++    if (fail_at("init")) { rc = M7G_T3_XS_INIT; goto fail; }
++#endif
++
++    x->registry = wl_display_get_registry(x->display);
++    wl_registry_add_listener(x->registry, &registry_listener, x);
++    if (wl_display_roundtrip(x->display) < 0) {
++        printf("T3_FAIL wl-registry-roundtrip\n");
++        rc = M7G_T3_XS_BIND;
++        goto fail;
++    }
++    if (!x->compositor || !x->factory || !x->manager) {
++        printf("T3_FAIL wl-globals compositor=%d factory=%d manager=%d\n",
++               x->compositor ? 1 : 0, x->factory ? 1 : 0, x->manager ? 1 : 0);
++        rc = M7G_T3_XS_BIND;
++        goto fail;
++    }
++    printf("T3_BIND compositor=1 factory=1 manager=1\n");
++#ifdef M7G_TEST_HOOKS
++    if (fail_at("bind")) { rc = M7G_T3_XS_BIND; goto fail; }
++#endif
++
++    x->surface = wl_compositor_create_surface(x->compositor);
++    if (!x->surface) {
++        printf("T3_FAIL wl-surface\n");
++        rc = M7G_T3_XS_STAGE;
++        goto fail;
++    }
++    x->swapchain = gamescope_swapchain_factory_v2_create_swapchain(x->factory, x->surface);
++    if (!x->swapchain) {
++        printf("T3_FAIL wl-swapchain-object\n");
++        rc = M7G_T3_XS_STAGE;
++        goto fail;
++    }
++    /* Events (refresh_cycle / past_present_timing / retired) must be handled
++     * from creation time; the listener is registered before any dispatch. */
++    gamescope_swapchain_add_listener(x->swapchain, &sc_listener, x);
++    gamescope_swapchain_override_window_content(x->swapchain, server_id, xid);
++    if (wl_display_roundtrip(x->display) < 0 || wl_display_get_error(x->display) != 0) {
++        printf("T3_FAIL override-roundtrip err=%d\n", wl_display_get_error(x->display));
++        rc = M7G_T3_XS_STAGE;
++        goto fail;
++    }
++    printf("T3_OVERRIDE server_id=%u xid=0x%x ok=1\n", server_id, xid);
++#ifdef M7G_TEST_HOOKS
++    if (fail_at("stage")) { rc = M7G_T3_XS_STAGE; goto fail; }
++#endif
++
++    if ((rc = vk_bridge_init(x)) != 0)
++        goto fail;
++
++    for (unsigned i = 0; i < x->slotCount; i++) {
++        if ((rc = slot_create(x, i)) != 0)
++            goto fail;
++        x->c.slots++;
++    }
++    /* flush registrations and let the server import the fds before we close ours */
++    wl_display_flush(x->display);
++    if (wl_display_roundtrip(x->display) < 0) {
++        printf("T3_FAIL register-roundtrip\n");
++        rc = M7G_T3_XS_SLOTS;
++        goto fail;
++    }
++    for (unsigned i = 0; i < x->slotCount; i++) {
++        struct t1_slot *s = &x->slot[i];
++        if (s->memFd >= 0)      { close(s->memFd);      s->memFd = -1; }
++        if (s->readyFd >= 0)    { close(s->readyFd);    s->readyFd = -1; }
++        if (s->returnedFd >= 0) { close(s->returnedFd); s->returnedFd = -1; }
++    }
++    printf("T3_XPORT backend=opaque_fd slots=%u display=%s w=%u h=%u bytes=%u\n",
++           x->slotCount, name, x->w, x->h, x->bytes);
++    *out = x;
++    return 0;
++
++fail:
++    m7g_t3_xport_destroy(x);
++    return rc;
++}
++
++/* ------------------------------------------------------------------ commit */
++int m7g_t3_xport_commit(m7g_t3_xport *x, unsigned slot, unsigned gen, const unsigned char *pixels)
++{
++    if (!x || slot >= x->slotCount)
++        return M7G_T3_XS_UPLOAD;
++    if (x->retired) {
++        printf("T3_FAIL swapchain-retired (refusing further commits)\n");
++        return M7G_T3_XS_RETIRED;
++    }
++    struct t1_slot *s = &x->slot[slot];
++    VkResult res;
++
++    if (s->usedOnce) {
++        x->c.reuse_waits++;
++        res = vkWaitForFences(x->device, 1, &s->fence, VK_TRUE, M7G_T3_FENCE_WAIT_NS);
++        if (res != VK_SUCCESS) {
++            printf("T3_FAIL reuse-wait slot=%u gen=%u res=%d\n", slot, gen, (int)res);
++            return M7G_T3_XS_REUSE;
++        }
++    }
++#ifdef M7G_TEST_HOOKS
++    if (fail_at("upload")) return M7G_T3_XS_UPLOAD;
++    if (fail_at("reuse"))  return M7G_T3_XS_REUSE;
++#endif
++    vkResetFences(x->device, 1, &s->fence);
++    vkResetCommandBuffer(s->cmd, 0);
++    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
++    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++    if (vkBeginCommandBuffer(s->cmd, &bi) != VK_SUCCESS) {
++        printf("T3_FAIL begin-cmd slot=%u\n", slot);
++        return M7G_T3_XS_UPLOAD;
++    }
++
++    /* staging: host writes -> transfer reads (the only CPU-write target) */
++    VkBufferMemoryBarrier hb = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
++    hb.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
++    hb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
++    hb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    hb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    hb.buffer = s->staging;
++    hb.offset = 0;
++    hb.size = VK_WHOLE_SIZE;
++    vkCmdPipelineBarrier(s->cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                         0, 0, NULL, 1, &hb, 0, NULL);
++
++    /* reuse: acquire the shared buffer back from EXTERNAL */
++    if (s->usedOnce) {
++        VkBufferMemoryBarrier acq = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
++        acq.srcAccessMask = 0;
++        acq.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++        acq.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
++        acq.dstQueueFamilyIndex = x->qfam;
++        acq.buffer = s->buffer;
++        acq.offset = 0;
++        acq.size = VK_WHOLE_SIZE;
++        vkCmdPipelineBarrier(s->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                             0, 0, NULL, 1, &acq, 0, NULL);
++    }
++
++    memcpy(s->stagingMap, pixels, x->bytes);
++
++    VkBufferCopy region = { 0, 0, x->bytes };
++    vkCmdCopyBuffer(s->cmd, s->staging, s->buffer, 1, &region);
++
++    /* release producer -> EXTERNAL so the compositor can consume the generation */
++    VkBufferMemoryBarrier rel = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
++    rel.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    rel.dstAccessMask = 0;
++    rel.srcQueueFamilyIndex = x->qfam;
++    rel.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
++    rel.buffer = s->buffer;
++    rel.offset = 0;
++    rel.size = VK_WHOLE_SIZE;
++    vkCmdPipelineBarrier(s->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
++                         0, 0, NULL, 1, &rel, 0, NULL);
++
++    if (vkEndCommandBuffer(s->cmd) != VK_SUCCESS) {
++        printf("T3_FAIL end-cmd slot=%u\n", slot);
++        return M7G_T3_XS_UPLOAD;
++    }
++
++    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
++    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
++    if (s->usedOnce) {
++        si.waitSemaphoreCount = 1;
++        si.pWaitSemaphores = &s->returned;
++        si.pWaitDstStageMask = &stage;
++    }
++    si.commandBufferCount = 1;
++    si.pCommandBuffers = &s->cmd;
++    si.signalSemaphoreCount = 1;
++    si.pSignalSemaphores = &s->ready;
++    res = vkQueueSubmit(x->queue, 1, &si, s->fence);
++    if (res != VK_SUCCESS) {
++        printf("T3_FAIL submit slot=%u gen=%u res=%d\n", slot, gen, (int)res);
++        return M7G_T3_XS_UPLOAD;
++    }
++    s->usedOnce = true;
++
++    wl_surface_attach(x->surface, s->wlBuffer, 0, 0);
++    wl_surface_damage_buffer(x->surface, 0, 0, (int32_t)x->w, (int32_t)x->h);
++    wl_surface_commit(x->surface);
++    if (wl_display_flush(x->display) < 0) {
++        printf("T3_FAIL flush slot=%u gen=%u\n", slot, gen);
++        return M7G_T3_XS_COMMIT;
++    }
++    if (wl_display_get_error(x->display) != 0) {
++        printf("T3_FAIL protocol-error slot=%u gen=%u err=%d\n", slot, gen, wl_display_get_error(x->display));
++        return M7G_T3_XS_COMMIT;
++    }
++    x->c.submitted++;
++    x->c.commits++;
++    printf("T3_COMMIT gen=%u slot=%u xid=0x%x\n", gen, slot, x->xid);
++    return 0;
++}
++
++int m7g_t3_xport_service(m7g_t3_xport *x, int timeout_ms)
++{
++    if (!x || !x->display)
++        return 0;
++    struct pollfd pfd;
++    pfd.fd = wl_display_get_fd(x->display);
++    pfd.events = POLLIN;
++    pfd.revents = 0;
++    while (wl_display_prepare_read(x->display) != 0) {
++        if (wl_display_dispatch_pending(x->display) < 0) {
++            printf("T3_FAIL service-dispatch err=%d\n", wl_display_get_error(x->display));
++            return M7G_T3_XS_DRAIN;
++        }
++    }
++    if (wl_display_flush(x->display) < 0 && errno != EAGAIN) {
++        wl_display_cancel_read(x->display);
++        printf("T3_FAIL service-flush errno=%d\n", errno);
++        return M7G_T3_XS_DRAIN;
++    }
++    int pr = poll(&pfd, 1, timeout_ms);
++    {
++        int verdict = m7g_t3_poll_verdict(pr, pfd.revents, errno);
++        if (verdict != 0) {
++            wl_display_cancel_read(x->display);
++            printf("T3_FAIL service-poll pr=%d revents=0x%x errno=%d\n",
++                   pr, (unsigned)pfd.revents, errno);
++            return M7G_T3_XS_DRAIN;
++        }
++    }
++    if (pr > 0 && (pfd.revents & POLLIN)) {
++        if (wl_display_read_events(x->display) < 0) {
++            printf("T3_FAIL service-read err=%d\n", wl_display_get_error(x->display));
++            return M7G_T3_XS_DRAIN;
++        }
++    } else {
++        wl_display_cancel_read(x->display);
++    }
++    if (wl_display_dispatch_pending(x->display) < 0) {
++        printf("T3_FAIL service-pending err=%d\n", wl_display_get_error(x->display));
++        return M7G_T3_XS_DRAIN;
++    }
++    return 0;
++}
++
++int m7g_t3_xport_drain(m7g_t3_xport *x)
++{
++    if (!x || !x->display)
++        return 0;
++    if (wl_display_flush(x->display) < 0 && errno != EAGAIN) {
++        printf("T3_FAIL drain-flush errno=%d\n", errno);
++        return M7G_T3_XS_DRAIN;
++    }
++    if (wl_display_roundtrip(x->display) < 0 ||
++        wl_display_get_error(x->display) != 0) {
++        printf("T3_FAIL drain-roundtrip err=%d\n", wl_display_get_error(x->display));
++        return M7G_T3_XS_DRAIN;
++    }
++    return 0;
++}
++
++int m7g_t3_xport_retired(const m7g_t3_xport *x)
++{
++    return x ? x->retired : 0;
++}
++
++void m7g_t3_xport_get_counters(const m7g_t3_xport *x, m7g_t3_xport_counters *c)
++{
++    *c = x->c;
++}
++
++int m7g_t3_xport_destroy(m7g_t3_xport *x)
++{
++    if (!x)
++        return 0;
++    /* Fail-closed teardown: only free Vulkan/Wayland resources when every
++     * in-flight submit is provably complete within a bounded wait.  If any
++     * fence wait does not succeed (e.g. VK_TIMEOUT while a submit still waits
++     * on `returned`), NOTHING is destroyed and the resources are left to
++     * process exit; the caller keeps its original failure rc. */
++    if (x->device) {
++        for (unsigned i = 0; i < x->slotCount; i++) {
++            struct t1_slot *s = &x->slot[i];
++            if (!s->fence || !s->usedOnce)
++                continue;
++            VkResult r = vkWaitForFences(x->device, 1, &s->fence, VK_TRUE, M7G_T3_FENCE_WAIT_NS);
++            if (r != VK_SUCCESS) {
++                printf("T3_FAIL teardown-inflight slot=%u res=%d\n", i, (int)r);
++                printf("T3_TEARDOWN_UNSAFE resources-left-to-process-exit=1\n");
++                return M7G_T3_XS_TEARDOWN;
++            }
++        }
++    }
++    if (x->display) {
++        for (unsigned i = 0; i < x->slotCount; i++) {
++            struct t1_slot *s = &x->slot[i];
++            if (s->wlBuffer) { wl_buffer_destroy(s->wlBuffer); s->wlBuffer = NULL; }
++        }
++        if (x->swapchain) { gamescope_swapchain_destroy(x->swapchain); x->swapchain = NULL; }
++        if (x->surface) { wl_surface_destroy(x->surface); x->surface = NULL; }
++        if (x->manager) { tegra_l4t_buffer_manager_destroy(x->manager); x->manager = NULL; }
++        if (x->factory) { gamescope_swapchain_factory_v2_destroy(x->factory); x->factory = NULL; }
++        if (x->compositor) { wl_compositor_destroy(x->compositor); x->compositor = NULL; }
++        if (x->registry) { wl_registry_destroy(x->registry); x->registry = NULL; }
++    }
++    if (x->device) {
++        for (unsigned i = 0; i < x->slotCount; i++) {
++            struct t1_slot *s = &x->slot[i];
++            if (s->stagingMap) { vkUnmapMemory(x->device, s->stagingMem); s->stagingMap = NULL; }
++            if (s->staging) { vkDestroyBuffer(x->device, s->staging, NULL); s->staging = VK_NULL_HANDLE; }
++            if (s->stagingMem) { vkFreeMemory(x->device, s->stagingMem, NULL); s->stagingMem = VK_NULL_HANDLE; }
++            if (s->ready) { vkDestroySemaphore(x->device, s->ready, NULL); s->ready = VK_NULL_HANDLE; }
++            if (s->returned) { vkDestroySemaphore(x->device, s->returned, NULL); s->returned = VK_NULL_HANDLE; }
++            if (s->buffer) { vkDestroyBuffer(x->device, s->buffer, NULL); s->buffer = VK_NULL_HANDLE; }
++            if (s->bufferMem) { vkFreeMemory(x->device, s->bufferMem, NULL); s->bufferMem = VK_NULL_HANDLE; }
++            if (s->fence) { vkDestroyFence(x->device, s->fence, NULL); s->fence = VK_NULL_HANDLE; }
++        }
++        if (x->pool) { vkDestroyCommandPool(x->device, x->pool, NULL); x->pool = VK_NULL_HANDLE; }
++        vkDestroyDevice(x->device, NULL);
++        x->device = VK_NULL_HANDLE;
++    }
++    if (x->instance) { vkDestroyInstance(x->instance, NULL); x->instance = VK_NULL_HANDLE; }
++    if (x->display) { wl_display_disconnect(x->display); x->display = NULL; }
++    free(x);
++    return 0;
++}
+diff --git a/src/glx/m7g-t3/protocol/gamescope-swapchain-client-protocol.h b/src/glx/m7g-t3/protocol/gamescope-swapchain-client-protocol.h
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/protocol/gamescope-swapchain-client-protocol.h
+@@ -0,0 +1,401 @@
++/* Generated by wayland-scanner 1.26.0 */
++
++#ifndef GAMESCOPE_SWAPCHAIN_CLIENT_PROTOCOL_H
++#define GAMESCOPE_SWAPCHAIN_CLIENT_PROTOCOL_H
++
++#include <stdint.h>
++#include <stddef.h>
++#include "wayland-client.h"
++
++#ifdef  __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @page page_gamescope_swapchain The gamescope_swapchain protocol
++ * gamescope-specific swapchain protocol
++ *
++ * @section page_desc_gamescope_swapchain Description
++ *
++ * This is a private Gamescope protocol. Regular Wayland clients must not use
++ * it.
++ *
++ * @section page_ifaces_gamescope_swapchain Interfaces
++ * - @subpage page_iface_gamescope_swapchain_factory_v2 - 
++ * - @subpage page_iface_gamescope_swapchain - 
++ * @section page_copyright_gamescope_swapchain Copyright
++ * <pre>
++ *
++ * Copyright © 2023 Joshua Ashton for Valve Software
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ * </pre>
++ */
++struct gamescope_swapchain;
++struct gamescope_swapchain_factory_v2;
++struct wl_surface;
++
++#ifndef GAMESCOPE_SWAPCHAIN_FACTORY_V2_INTERFACE
++#define GAMESCOPE_SWAPCHAIN_FACTORY_V2_INTERFACE
++/**
++ * @page page_iface_gamescope_swapchain_factory_v2 gamescope_swapchain_factory_v2
++ * @section page_iface_gamescope_swapchain_factory_v2_api API
++ * See @ref iface_gamescope_swapchain_factory_v2.
++ */
++/**
++ * @defgroup iface_gamescope_swapchain_factory_v2 The gamescope_swapchain_factory_v2 interface
++ */
++extern const struct wl_interface gamescope_swapchain_factory_v2_interface;
++#endif
++#ifndef GAMESCOPE_SWAPCHAIN_INTERFACE
++#define GAMESCOPE_SWAPCHAIN_INTERFACE
++/**
++ * @page page_iface_gamescope_swapchain gamescope_swapchain
++ * @section page_iface_gamescope_swapchain_api API
++ * See @ref iface_gamescope_swapchain.
++ */
++/**
++ * @defgroup iface_gamescope_swapchain The gamescope_swapchain interface
++ */
++extern const struct wl_interface gamescope_swapchain_interface;
++#endif
++
++#define GAMESCOPE_SWAPCHAIN_FACTORY_V2_DESTROY 0
++#define GAMESCOPE_SWAPCHAIN_FACTORY_V2_CREATE_SWAPCHAIN 1
++
++
++/**
++ * @ingroup iface_gamescope_swapchain_factory_v2
++ */
++#define GAMESCOPE_SWAPCHAIN_FACTORY_V2_DESTROY_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain_factory_v2
++ */
++#define GAMESCOPE_SWAPCHAIN_FACTORY_V2_CREATE_SWAPCHAIN_SINCE_VERSION 1
++
++/** @ingroup iface_gamescope_swapchain_factory_v2 */
++static inline void
++gamescope_swapchain_factory_v2_set_user_data(struct gamescope_swapchain_factory_v2 *gamescope_swapchain_factory_v2, void *user_data)
++{
++	wl_proxy_set_user_data((struct wl_proxy *) gamescope_swapchain_factory_v2, user_data);
++}
++
++/** @ingroup iface_gamescope_swapchain_factory_v2 */
++static inline void *
++gamescope_swapchain_factory_v2_get_user_data(struct gamescope_swapchain_factory_v2 *gamescope_swapchain_factory_v2)
++{
++	return wl_proxy_get_user_data((struct wl_proxy *) gamescope_swapchain_factory_v2);
++}
++
++static inline uint32_t
++gamescope_swapchain_factory_v2_get_version(struct gamescope_swapchain_factory_v2 *gamescope_swapchain_factory_v2)
++{
++	return wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain_factory_v2);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain_factory_v2
++ */
++static inline void
++gamescope_swapchain_factory_v2_destroy(struct gamescope_swapchain_factory_v2 *gamescope_swapchain_factory_v2)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain_factory_v2,
++			 GAMESCOPE_SWAPCHAIN_FACTORY_V2_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain_factory_v2), WL_MARSHAL_FLAG_DESTROY);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain_factory_v2
++ *
++ */
++static inline struct gamescope_swapchain *
++gamescope_swapchain_factory_v2_create_swapchain(struct gamescope_swapchain_factory_v2 *gamescope_swapchain_factory_v2, struct wl_surface *surface)
++{
++	struct wl_proxy *callback;
++
++	callback = wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain_factory_v2,
++			 GAMESCOPE_SWAPCHAIN_FACTORY_V2_CREATE_SWAPCHAIN, &gamescope_swapchain_interface, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain_factory_v2), 0, surface, NULL);
++
++	return (struct gamescope_swapchain *) callback;
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ * @struct gamescope_swapchain_listener
++ */
++struct gamescope_swapchain_listener {
++	/**
++	 * information about past presentation
++	 *
++	 * Gives information on the past presentation timing
++	 * @param present_id application provided presentation id
++	 * @param desired_present_time_hi high part of the desired presentation time for the commit. (from the app)
++	 * @param desired_present_time_lo low part of the desired presentation time for the commit. (from the app)
++	 * @param actual_present_time_hi high part of the actual present time for this commit.
++	 * @param actual_present_time_lo low part of the actual present time for this commit.
++	 * @param earliest_present_time_hi high part of the refresh time that Gamescope thought this commit was done by.
++	 * @param earliest_present_time_lo low part of the refresh time that Gamescope thought this commit was done by.
++	 * @param present_margin_hi high part of the difference between earliest present time and the earliest latch time
++	 * @param present_margin_lo low part of the difference between earliest present time and the earliest latch time
++	 */
++	void (*past_present_timing)(void *data,
++				    struct gamescope_swapchain *gamescope_swapchain,
++				    uint32_t present_id,
++				    uint32_t desired_present_time_hi,
++				    uint32_t desired_present_time_lo,
++				    uint32_t actual_present_time_hi,
++				    uint32_t actual_present_time_lo,
++				    uint32_t earliest_present_time_hi,
++				    uint32_t earliest_present_time_lo,
++				    uint32_t present_margin_hi,
++				    uint32_t present_margin_lo);
++	/**
++	 * information about refresh cycle for this swapchain
++	 *
++	 * Gives information on the refresh cycle for this swapchain
++	 * @param refresh_cycle_hi high part of the refresh cycle in nanos
++	 * @param refresh_cycle_lo low part of the refresh cycle in nanos
++	 */
++	void (*refresh_cycle)(void *data,
++			      struct gamescope_swapchain *gamescope_swapchain,
++			      uint32_t refresh_cycle_hi,
++			      uint32_t refresh_cycle_lo);
++	/**
++	 * Swapchain was remotely retired
++	 *
++	 * 
++	 */
++	void (*retired)(void *data,
++			struct gamescope_swapchain *gamescope_swapchain);
++};
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++static inline int
++gamescope_swapchain_add_listener(struct gamescope_swapchain *gamescope_swapchain,
++				 const struct gamescope_swapchain_listener *listener, void *data)
++{
++	return wl_proxy_add_listener((struct wl_proxy *) gamescope_swapchain,
++				     (void (**)(void)) listener, data);
++}
++
++#define GAMESCOPE_SWAPCHAIN_DESTROY 0
++#define GAMESCOPE_SWAPCHAIN_OVERRIDE_WINDOW_CONTENT 1
++#define GAMESCOPE_SWAPCHAIN_SWAPCHAIN_FEEDBACK 2
++#define GAMESCOPE_SWAPCHAIN_SET_PRESENT_MODE 3
++#define GAMESCOPE_SWAPCHAIN_SET_HDR_METADATA 4
++#define GAMESCOPE_SWAPCHAIN_SET_PRESENT_TIME 5
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_PAST_PRESENT_TIMING_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_REFRESH_CYCLE_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_RETIRED_SINCE_VERSION 1
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_DESTROY_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_OVERRIDE_WINDOW_CONTENT_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_SWAPCHAIN_FEEDBACK_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_SET_PRESENT_MODE_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_SET_HDR_METADATA_SINCE_VERSION 1
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++#define GAMESCOPE_SWAPCHAIN_SET_PRESENT_TIME_SINCE_VERSION 1
++
++/** @ingroup iface_gamescope_swapchain */
++static inline void
++gamescope_swapchain_set_user_data(struct gamescope_swapchain *gamescope_swapchain, void *user_data)
++{
++	wl_proxy_set_user_data((struct wl_proxy *) gamescope_swapchain, user_data);
++}
++
++/** @ingroup iface_gamescope_swapchain */
++static inline void *
++gamescope_swapchain_get_user_data(struct gamescope_swapchain *gamescope_swapchain)
++{
++	return wl_proxy_get_user_data((struct wl_proxy *) gamescope_swapchain);
++}
++
++static inline uint32_t
++gamescope_swapchain_get_version(struct gamescope_swapchain *gamescope_swapchain)
++{
++	return wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++static inline void
++gamescope_swapchain_destroy(struct gamescope_swapchain *gamescope_swapchain)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain,
++			 GAMESCOPE_SWAPCHAIN_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain), WL_MARSHAL_FLAG_DESTROY);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ *
++ * Xwayland creates a wl_surface for each X11 window. It sends a
++ * WL_SURFACE_ID client message to indicate the mapping between the X11
++ * windows and the wl_surface objects.
++ *
++ * This request overrides this mapping for a given X11 window, allowing an
++ * X11 client to submit buffers via the Wayland protocol. The override
++ * only affects buffer submission. Everything else (e.g. input events)
++ * still uses Xwayland's WL_SURFACE_ID.
++ *
++ * x11_server is gotten by the GAMESCOPE_XWAYLAND_SERVER_ID property on the
++ * root window of the associated server.
++ */
++static inline void
++gamescope_swapchain_override_window_content(struct gamescope_swapchain *gamescope_swapchain, uint32_t gamescope_xwayland_server_id, uint32_t x11_window)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain,
++			 GAMESCOPE_SWAPCHAIN_OVERRIDE_WINDOW_CONTENT, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain), 0, gamescope_xwayland_server_id, x11_window);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ *
++ * Provide swapchain feedback to the compositor.
++ *
++ * This is what the useless tearing protocol should have been.
++ * Absolutely not enough information in the final protocol to do what we want for SteamOS --
++ * which is have the Allow Tearing toggle apply to *both* Mailbox + Immediate and NOT fifo,
++ * essentially acting as an override for tearing on/off for games.
++ * The upstream protocol is very useless for our usecase here.
++ *
++ * Provides image count ahead of time instead of needing to try and calculate it from
++ * an initial stall if we are doing low latency.
++ *
++ * Provides colorspace info for us to do HDR for both HDR10 PQ and scRGB.
++ * The upstream HDR efforts seem to have no interest in supporting scRGB but we *need* that so /shrug
++ * We can do it here now! Yipee!
++ *
++ * Swapchain feedback solves so many problems! :D
++ */
++static inline void
++gamescope_swapchain_swapchain_feedback(struct gamescope_swapchain *gamescope_swapchain, uint32_t image_count, uint32_t vk_format, uint32_t vk_colorspace, uint32_t vk_composite_alpha, uint32_t vk_pre_transform, uint32_t vk_clipped, const char *vk_engine_name)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain,
++			 GAMESCOPE_SWAPCHAIN_SWAPCHAIN_FEEDBACK, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain), 0, image_count, vk_format, vk_colorspace, vk_composite_alpha, vk_pre_transform, vk_clipped, vk_engine_name);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ */
++static inline void
++gamescope_swapchain_set_present_mode(struct gamescope_swapchain *gamescope_swapchain, uint32_t vk_present_mode)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain,
++			 GAMESCOPE_SWAPCHAIN_SET_PRESENT_MODE, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain), 0, vk_present_mode);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ *
++ * Forward HDR metadata from Vulkan to the compositor.
++ *
++ * HDR Metadata Infoframe as per CTA 861.G spec.
++ * This is expected to match exactly with the spec.
++ *
++ * display_primary_*:
++ * Color Primaries of the Data.
++ * Specifies X and Y coordinates.
++ * These are coded as unsigned 16-bit values in units of
++ * 0.00002, where 0x0000 represents zero and 0xC350
++ * represents 1.0000.
++ *
++ * white_point_*:
++ * White Point of Colorspace Data.
++ * Specifies X and Y coordinates.
++ * These are coded as unsigned 16-bit values in units of
++ * 0.00002, where 0x0000 represents zero and 0xC350
++ * represents 1.0000.
++ *
++ * max_display_mastering_luminance:
++ * Max Mastering Display Luminance.
++ * This value is coded as an unsigned 16-bit value in units of 1 cd/m2,
++ * where 0x0001 represents 1 cd/m2 and 0xFFFF represents 65535 cd/m2.
++ *
++ * max_display_mastering_luminance:
++ * Min Mastering Display Luminance.
++ * This value is coded as an unsigned 16-bit value in units of
++ * 0.0001 cd/m2, where 0x0001 represents 0.0001 cd/m2 and 0xFFFF
++ * represents 6.5535 cd/m2.
++ *
++ * max_cll:
++ * Max Content Light Level.
++ * This value is coded as an unsigned 16-bit value in units of 1 cd/m2,
++ * where 0x0001 represents 1 cd/m2 and 0xFFFF represents 65535 cd/m2.
++ *
++ * max_fall:
++ * Max Frame Average Light Level.
++ * This value is coded as an unsigned 16-bit value in units of 1 cd/m2,
++ * where 0x0001 represents 1 cd/m2 and 0xFFFF represents 65535 cd/m2.
++ */
++static inline void
++gamescope_swapchain_set_hdr_metadata(struct gamescope_swapchain *gamescope_swapchain, uint32_t display_primary_red_x, uint32_t display_primary_red_y, uint32_t display_primary_green_x, uint32_t display_primary_green_y, uint32_t display_primary_blue_x, uint32_t display_primary_blue_y, uint32_t white_point_x, uint32_t white_point_y, uint32_t max_display_mastering_luminance, uint32_t min_display_mastering_luminance, uint32_t max_cll, uint32_t max_fall)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain,
++			 GAMESCOPE_SWAPCHAIN_SET_HDR_METADATA, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain), 0, display_primary_red_x, display_primary_red_y, display_primary_green_x, display_primary_green_y, display_primary_blue_x, display_primary_blue_y, white_point_x, white_point_y, max_display_mastering_luminance, min_display_mastering_luminance, max_cll, max_fall);
++}
++
++/**
++ * @ingroup iface_gamescope_swapchain
++ *
++ * Sets the display timing of the next commit.
++ *
++ * This gets reset to 0s in the compositor's state after a commit.
++ */
++static inline void
++gamescope_swapchain_set_present_time(struct gamescope_swapchain *gamescope_swapchain, uint32_t present_id, uint32_t desired_present_time_hi, uint32_t desired_present_time_lo)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) gamescope_swapchain,
++			 GAMESCOPE_SWAPCHAIN_SET_PRESENT_TIME, NULL, wl_proxy_get_version((struct wl_proxy *) gamescope_swapchain), 0, present_id, desired_present_time_hi, desired_present_time_lo);
++}
++
++#ifdef  __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/glx/m7g-t3/protocol/gamescope-swapchain-protocol.c b/src/glx/m7g-t3/protocol/gamescope-swapchain-protocol.c
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/protocol/gamescope-swapchain-protocol.c
+@@ -0,0 +1,92 @@
++/* Generated by wayland-scanner 1.26.0 */
++
++/*
++ * Copyright © 2023 Joshua Ashton for Valve Software
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++#include <stdbool.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include "wayland-util.h"
++
++#ifndef __has_attribute
++# define __has_attribute(x) 0  /* Compatibility with non-clang compilers. */
++#endif
++
++#if (__has_attribute(visibility) || defined(__GNUC__) && __GNUC__ >= 4)
++#define WL_PRIVATE __attribute__ ((visibility("hidden")))
++#else
++#define WL_PRIVATE
++#endif
++
++extern const struct wl_interface gamescope_swapchain_interface;
++extern const struct wl_interface wl_surface_interface;
++
++static const struct wl_interface *gamescope_swapchain_types[] = {
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	&wl_surface_interface,
++	&gamescope_swapchain_interface,
++};
++
++static const struct wl_message gamescope_swapchain_factory_v2_requests[] = {
++	{ "destroy", "", gamescope_swapchain_types + 0 },
++	{ "create_swapchain", "on", gamescope_swapchain_types + 12 },
++};
++
++WL_PRIVATE const struct wl_interface gamescope_swapchain_factory_v2_interface = {
++	"gamescope_swapchain_factory_v2", 1,
++	2, gamescope_swapchain_factory_v2_requests,
++	0, NULL,
++};
++
++static const struct wl_message gamescope_swapchain_requests[] = {
++	{ "destroy", "", gamescope_swapchain_types + 0 },
++	{ "override_window_content", "uu", gamescope_swapchain_types + 0 },
++	{ "swapchain_feedback", "uuuuuus", gamescope_swapchain_types + 0 },
++	{ "set_present_mode", "u", gamescope_swapchain_types + 0 },
++	{ "set_hdr_metadata", "uuuuuuuuuuuu", gamescope_swapchain_types + 0 },
++	{ "set_present_time", "uuu", gamescope_swapchain_types + 0 },
++};
++
++static const struct wl_message gamescope_swapchain_events[] = {
++	{ "past_present_timing", "uuuuuuuuu", gamescope_swapchain_types + 0 },
++	{ "refresh_cycle", "uu", gamescope_swapchain_types + 0 },
++	{ "retired", "", gamescope_swapchain_types + 0 },
++};
++
++WL_PRIVATE const struct wl_interface gamescope_swapchain_interface = {
++	"gamescope_swapchain", 1,
++	6, gamescope_swapchain_requests,
++	3, gamescope_swapchain_events,
++};
++
+diff --git a/src/glx/m7g-t3/protocol/tegra-l4t-buffer-client-protocol.h b/src/glx/m7g-t3/protocol/tegra-l4t-buffer-client-protocol.h
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/protocol/tegra-l4t-buffer-client-protocol.h
+@@ -0,0 +1,153 @@
++/* Generated by wayland-scanner 1.26.0 */
++
++#ifndef TEGRA_L4T_BUFFER_CLIENT_PROTOCOL_H
++#define TEGRA_L4T_BUFFER_CLIENT_PROTOCOL_H
++
++#include <stdint.h>
++#include <stddef.h>
++#include "wayland-client.h"
++
++#ifdef  __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @page page_tegra_l4t_buffer The tegra_l4t_buffer protocol
++ * private Tegra L4T GPU client buffer transport (v2)
++ *
++ * @section page_desc_tegra_l4t_buffer Description
++ *
++ * THIS IS A PRIVATE GAMESCOPE PROTOCOL. Regular Wayland clients must NOT use
++ * it.
++ *
++ * Per-slot IMMUTABLE registration of a cross-process NVIDIA OPAQUE_FD Vulkan
++ * *buffer* (NOT DMA_BUF_EXT, NOT linux-dmabuf) plus the exact allocation and
++ * synchronisation payloads:
++ *
++ * memoryFD, ready binary-semaphoreFD (producer signals), returned
++ * binary-semaphoreFD (consumer signals), VkBufferCreateInfo size/usage/
++ * sharing, VkMemoryAllocateInfo allocationSize + original memoryTypeIndex,
++ * dedicated-allocation status, and deviceUUID/driverUUID.
++ *
++ * The created object is a real wl_buffer: the client attaches it to a real
++ * wl_surface and commits. The compositor imports the *matching* OPAQUE_FD
++ * payloads on its own VkDevice/queue. The CPU only handles metadata and fds.
++ *
++ * Registration alone must never mark a slot pending or wait on an uncommitted
++ * buffer. Import may be refused if the metadata does not exactly match a
++ * supported configuration (fail closed).
++ *
++ * @section page_ifaces_tegra_l4t_buffer Interfaces
++ * - @subpage page_iface_tegra_l4t_buffer_manager - 
++ * @section page_copyright_tegra_l4t_buffer Copyright
++ * <pre>
++ *
++ * Copyright © 2026 SteamOS-Switch native-gamescope effort
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * </pre>
++ */
++struct tegra_l4t_buffer_manager;
++struct wl_buffer;
++
++#ifndef TEGRA_L4T_BUFFER_MANAGER_INTERFACE
++#define TEGRA_L4T_BUFFER_MANAGER_INTERFACE
++/**
++ * @page page_iface_tegra_l4t_buffer_manager tegra_l4t_buffer_manager
++ * @section page_iface_tegra_l4t_buffer_manager_api API
++ * See @ref iface_tegra_l4t_buffer_manager.
++ */
++/**
++ * @defgroup iface_tegra_l4t_buffer_manager The tegra_l4t_buffer_manager interface
++ */
++extern const struct wl_interface tegra_l4t_buffer_manager_interface;
++#endif
++
++#ifndef TEGRA_L4T_BUFFER_MANAGER_ERROR_ENUM
++#define TEGRA_L4T_BUFFER_MANAGER_ERROR_ENUM
++enum tegra_l4t_buffer_manager_error {
++	/**
++	 * unsupported metadata/format
++	 */
++	TEGRA_L4T_BUFFER_MANAGER_ERROR_UNSUPPORTED = 0,
++	/**
++	 * inconsistent/bounded metadata
++	 */
++	TEGRA_L4T_BUFFER_MANAGER_ERROR_BAD_METADATA = 1,
++};
++#endif /* TEGRA_L4T_BUFFER_MANAGER_ERROR_ENUM */
++
++#define TEGRA_L4T_BUFFER_MANAGER_DESTROY 0
++#define TEGRA_L4T_BUFFER_MANAGER_REGISTER_BUFFER 1
++
++
++/**
++ * @ingroup iface_tegra_l4t_buffer_manager
++ */
++#define TEGRA_L4T_BUFFER_MANAGER_DESTROY_SINCE_VERSION 1
++/**
++ * @ingroup iface_tegra_l4t_buffer_manager
++ */
++#define TEGRA_L4T_BUFFER_MANAGER_REGISTER_BUFFER_SINCE_VERSION 1
++
++/** @ingroup iface_tegra_l4t_buffer_manager */
++static inline void
++tegra_l4t_buffer_manager_set_user_data(struct tegra_l4t_buffer_manager *tegra_l4t_buffer_manager, void *user_data)
++{
++	wl_proxy_set_user_data((struct wl_proxy *) tegra_l4t_buffer_manager, user_data);
++}
++
++/** @ingroup iface_tegra_l4t_buffer_manager */
++static inline void *
++tegra_l4t_buffer_manager_get_user_data(struct tegra_l4t_buffer_manager *tegra_l4t_buffer_manager)
++{
++	return wl_proxy_get_user_data((struct wl_proxy *) tegra_l4t_buffer_manager);
++}
++
++static inline uint32_t
++tegra_l4t_buffer_manager_get_version(struct tegra_l4t_buffer_manager *tegra_l4t_buffer_manager)
++{
++	return wl_proxy_get_version((struct wl_proxy *) tegra_l4t_buffer_manager);
++}
++
++/**
++ * @ingroup iface_tegra_l4t_buffer_manager
++ */
++static inline void
++tegra_l4t_buffer_manager_destroy(struct tegra_l4t_buffer_manager *tegra_l4t_buffer_manager)
++{
++	wl_proxy_marshal_flags((struct wl_proxy *) tegra_l4t_buffer_manager,
++			 TEGRA_L4T_BUFFER_MANAGER_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) tegra_l4t_buffer_manager), WL_MARSHAL_FLAG_DESTROY);
++}
++
++/**
++ * @ingroup iface_tegra_l4t_buffer_manager
++ */
++static inline struct wl_buffer *
++tegra_l4t_buffer_manager_register_buffer(struct tegra_l4t_buffer_manager *tegra_l4t_buffer_manager, int32_t width, int32_t height, uint32_t drm_format, uint32_t buffer_size, uint32_t buffer_usage, uint32_t buffer_sharing, uint32_t allocation_size, uint32_t memory_type_index, uint32_t memory_type_bits, uint32_t memory_property_flags, uint32_t dedicated, struct wl_array *device_uuid, struct wl_array *driver_uuid, int32_t memory_fd, int32_t ready_fd, int32_t returned_fd)
++{
++	struct wl_proxy *id;
++
++	id = wl_proxy_marshal_flags((struct wl_proxy *) tegra_l4t_buffer_manager,
++			 TEGRA_L4T_BUFFER_MANAGER_REGISTER_BUFFER, &wl_buffer_interface, wl_proxy_get_version((struct wl_proxy *) tegra_l4t_buffer_manager), 0, NULL, width, height, drm_format, buffer_size, buffer_usage, buffer_sharing, allocation_size, memory_type_index, memory_type_bits, memory_property_flags, dedicated, device_uuid, driver_uuid, memory_fd, ready_fd, returned_fd);
++
++	return (struct wl_buffer *) id;
++}
++
++#ifdef  __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/glx/m7g-t3/protocol/tegra-l4t-buffer-protocol.c b/src/glx/m7g-t3/protocol/tegra-l4t-buffer-protocol.c
+new file mode 100644
+--- /dev/null
++++ b/src/glx/m7g-t3/protocol/tegra-l4t-buffer-protocol.c
+@@ -0,0 +1,68 @@
++/* Generated by wayland-scanner 1.26.0 */
++
++/*
++ * Copyright © 2026 SteamOS-Switch native-gamescope effort
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ */
++
++#include <stdbool.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include "wayland-util.h"
++
++#ifndef __has_attribute
++# define __has_attribute(x) 0  /* Compatibility with non-clang compilers. */
++#endif
++
++#if (__has_attribute(visibility) || defined(__GNUC__) && __GNUC__ >= 4)
++#define WL_PRIVATE __attribute__ ((visibility("hidden")))
++#else
++#define WL_PRIVATE
++#endif
++
++extern const struct wl_interface wl_buffer_interface;
++
++static const struct wl_interface *tegra_l4t_buffer_types[] = {
++	&wl_buffer_interface,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++};
++
++static const struct wl_message tegra_l4t_buffer_manager_requests[] = {
++	{ "destroy", "", tegra_l4t_buffer_types + 0 },
++	{ "register_buffer", "niiuuuuuuuuuaahhh", tegra_l4t_buffer_types + 0 },
++};
++
++WL_PRIVATE const struct wl_interface tegra_l4t_buffer_manager_interface = {
++	"tegra_l4t_buffer_manager", 1,
++	2, tegra_l4t_buffer_manager_requests,
++	0, NULL,
++};
++
+diff --git a/src/glx/meson.build b/src/glx/meson.build
+--- a/src/glx/meson.build
++++ b/src/glx/meson.build
+@@ -19,6 +19,7 @@
+   'dri_common_interop.c',
+   'drisw_glx.c',
+   'drisw_priv.h',
++  'm7g-t3/m7g_t3_adapter.c',
+   'eval.c',
+   'glxclient.h',
+   'glxcmds.c',
+@@ -59,6 +60,18 @@
+ extra_libs_libglx = []
+ extra_deps_libgl = []
+ extra_ld_args_libgl = []
++
++# M7g T3 (private, env-gated): adapter transport backend selection.
++m7g_t3_extra_c_args = []
++if get_option('m7g-t3-transport') == 'stub'
++  files_libglx += files('m7g-t3/m7g_t3_transport_stub.c')
++  m7g_t3_extra_c_args += ['-DM7G_TEST_HOOKS']
++else
++  files_libglx += files('m7g-t3/m7g_t3_transport_vk.c',
++                        'm7g-t3/protocol/gamescope-swapchain-protocol.c',
++                        'm7g-t3/protocol/tegra-l4t-buffer-protocol.c')
++  extra_ld_args_libgl += ['-l:libwayland-client.so.0', '-l:libvulkan.so.1']
++endif
+ 
+ # dri2
+ if (with_dri_platform == 'drm' and dep_libdrm.found()) or with_dri_platform == 'apple'
+@@ -112,13 +125,16 @@
+ if with_platform_windows
+   glx_gallium_link += libgallium_wgl
+ endif
++inc_m7g_t3_protocol = include_directories('m7g-t3/protocol')
++
+ libglx = static_library(
+   'glx',
+   [files_libglx, glx_generated],
+-  include_directories : [inc_include, inc_src, inc_glapi, inc_loader, inc_gallium],
++  include_directories : [inc_include, inc_src, inc_glapi, inc_loader, inc_gallium, inc_glx,
++                         inc_m7g_t3_protocol],
+   c_args : [
+     '-DGL_LIB_NAME="lib@0@.so.@1@"'.format(gl_lib_name, gl_lib_version.split('.')[0]),
+-  ],
++  ] + m7g_t3_extra_c_args,
+   gnu_symbol_visibility : 'hidden',
+   link_with : [
+     libloader, libloader_dri3_helper,
+diff --git a/src/util/m7g_t3.h b/src/util/m7g_t3.h
+new file mode 100644
+--- /dev/null
++++ b/src/util/m7g_t3.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* M7g T3 — private Steam-compatibility GLX/drisw/Zink adapter env gate.
++ *
++ * Task-local.  Enabled only for the exact value M7G_T3_ADAPTER=1
++ * (fail-closed: anything else, including unset, leaves the upstream path
++ * byte-identical).  The frozen T1/T2 env gates are separate.
++ */
++#ifndef M7G_T3_H
++#define M7G_T3_H
++
++#include <stdlib.h>
++#include <stdbool.h>
++
++static inline bool
++m7g_t3_adapter_enabled(void)
++{
++   static int cached = -1;
++   if (cached < 0) {
++      const char *e = getenv("M7G_T3_ADAPTER");
++      cached = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
++   }
++   return cached != 0;
++}
++
++#endif /* M7G_T3_H */

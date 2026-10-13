@@ -31,15 +31,19 @@ def validate_llvm_metadata(metadata):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('component', choices=('mesa', 'xwayland', 'wayland', 'egl-wayland'))
+    ap.add_argument('component', choices=('mesa', 'mesa-zink-t3', 'xwayland', 'wayland', 'egl-wayland'))
     ap.add_argument('--source', type=Path, required=True)
     ap.add_argument('--sysroot', type=Path, required=True)
     ap.add_argument('--build-dir', type=Path, required=True)
     ap.add_argument('--host-tools', type=Path, required=True)
-    ap.add_argument('--profile', choices=('llvmpipe', 'zink'), default='llvmpipe')
+    ap.add_argument('--profile', choices=('llvmpipe', 'zink'))
     ap.add_argument('--llvm-config', type=Path, help='native executable with target AArch64 library metadata')
     ap.add_argument('--jobs', type=int, default=2)
     args = ap.parse_args()
+    if args.profile is None:
+        args.profile = 'zink' if args.component == 'mesa-zink-t3' else 'llvmpipe'
+    if args.component == 'mesa-zink-t3' and args.profile != 'zink':
+        raise SystemExit('The qualified T3 source profile requires Zink, not llvmpipe')
     source, sysroot, build = args.source.resolve(strict=True), args.sysroot.resolve(strict=True), args.build_dir.resolve()
     if build.exists() or build.is_symlink() or args.jobs < 1:
         raise SystemExit('Fresh build directory and positive jobs required')
@@ -56,7 +60,7 @@ def main():
     flags = ['-march=armv8-a', '-mtune=cortex-a57', '-mno-outline-atomics', '--sysroot=' + str(sysroot)]
     pkgdirs = [str(sysroot / p) for p in ('usr/lib/pkgconfig', 'usr/lib/aarch64-linux-gnu/pkgconfig', 'usr/share/pkgconfig') if (sysroot / p).is_dir()]
     cross = "[binaries]\nc='aarch64-linux-gnu-gcc'\ncpp='aarch64-linux-gnu-g++'\nar='aarch64-linux-gnu-ar'\nstrip='aarch64-linux-gnu-strip'\npkg-config='pkg-config'\n"
-    if args.component == 'mesa' and args.profile == 'llvmpipe':
+    if args.component.startswith('mesa') and args.profile == 'llvmpipe':
         if not args.llvm_config:
             raise SystemExit('llvmpipe needs --llvm-config with AArch64 native init metadata and target libraries')
         llvm = args.llvm_config.resolve(strict=True)
@@ -73,13 +77,15 @@ def main():
         raise SystemExit('Cross-file collision')
     machine.write_text(cross)
     options = []
-    if args.component == 'mesa':
+    if args.component.startswith('mesa'):
         options = ['-Dgallium-drivers=' + args.profile, '-Dllvm=' + ('enabled' if args.profile == 'llvmpipe' else 'disabled'),
                    '-Dglx=dri', '-Dglvnd=enabled', '-Dplatforms=x11', '-Dopengl=true',
                    '-Dgles1=disabled', '-Dgles2=disabled', '-Degl=disabled', '-Dgbm=disabled',
                    '-Dvulkan-drivers=', '-Dvalgrind=disabled', '-Dlibunwind=disabled', '-Dlmsensors=disabled',
                    '-Dbuild-tests=false', '-Dtools=', '-Dvideo-codecs=', '-Dzstd=enabled', '-Dexpat=enabled',
                    '-Dxlib-lease=disabled', '-Dgallium-va=disabled', '-Dgallium-rusticl=false']
+        if args.component == 'mesa-zink-t3':
+            options += ['-Dm7g-t3-transport=vk']
     elif args.component == 'xwayland':
         options = ['-Dxwayland_eglstream=true', '-Dxvfb=false', '-Ddocs=false', '-Ddevel-docs=false', '-Dxwayland_ei=false']
     elif args.component == 'wayland':
@@ -95,7 +101,7 @@ def main():
         print('+', ' '.join(cmd), flush=True)
         subprocess.run(cmd, check=True, env=env, timeout=3600)
     (build / 'BUILD-RESULT.json').write_text(json.dumps({'result': 'SOURCE_COMPILE_PASS', 'hardware_qualified': False,
-          'component': args.component, 'profile': args.profile if args.component == 'mesa' else None,
+          'component': args.component, 'profile': args.profile if args.component.startswith('mesa') else None,
           'source_tree_sha256': receipt['tree_sha256'], 'source_pin': receipt['source_pin'], 'setup': setup}, indent=2) + '\n')
     print('GRAPHICS_COMPONENT_BUILT_NO_INSTALL', args.component)
 
