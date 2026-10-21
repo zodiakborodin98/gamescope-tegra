@@ -115,3 +115,12 @@ These documents inventory the package and its terms; they are not a legal
 warranty. Adding another component or distributing a new executable changes
 the concrete redistribution checklist.
 
+# 21 October source additions
+
+The GPU-child overlay preserves Mesa MIT, SGI-B-2.0 and project per-file
+notices. The SGI license text is retained in
+[LICENSES/SGI-B-2.0.txt](../LICENSES/SGI-B-2.0.txt), obtained from the
+[SPDX license record](https://spdx.org/licenses/SGI-B-2.0.html). Existing
+copyright headers are not replaced by the packaging license. The following
+historical component discussion remains applicable where unchanged.
+

@@ -122,6 +122,7 @@ namespace gamescope
     bool TegraL4TInitEglStream( ::wl_display *pDisplay );
     bool TegraL4TIsEglStreamBuffer( ::wlr_buffer *pBuffer );
     gamescope::OwningRc<CVulkanTexture> TegraL4TCreateTextureFromEglStreamBuffer( ::wlr_buffer *pBuffer );
+    gamescope::OwningRc<CVulkanTexture> TegraL4TCreateTextureFromEglStreamBufferWithYFlip( ::wlr_buffer *pBuffer, bool bExtraYFlip );
     void TegraL4TDiscardEglStreamCommit( ::wlr_buffer *pBuffer, const char *pReason );
 
     // M7f: stop the persistent presenter (DC close while owning, head restore)

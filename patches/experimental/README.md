@@ -13,3 +13,10 @@ failure. The default baseline also has documented latent lifetime defects.
 Use a separate source copy and build directory. Neither applying this patch nor
 building an ELF is permission to replace a working device session. Preserve all
 GPL/upstream notices and the source/build inputs when redistributing derivatives.
+# Historical patch boundary — 21 October 2026
+
+The patch below targets the old pre-M10O source snapshot. The main tree now
+contains the later ownership/transport/discard lineage. Do not apply this
+historical patch on top of the current tree. See
+[current source status](../../docs/UPDATE-2026-10-21.md).
+

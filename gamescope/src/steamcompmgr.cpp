@@ -1858,8 +1858,16 @@ import_commit (
 		// context, transfer it full-extent into the compositor transport slot and
 		// copy it GPU-side into a fresh Gamescope-owned image (accepted body). The
 		// buffer memo is not used; each commit is one fresh generation.
+		const char *pGameYFlipAppId = getenv("TEGRA_L4T_DXVK_YFLIP_APPID");
 		gamescope::OwningRc<CVulkanTexture> pEglStream =
-			gamescope::TegraL4TCreateTextureFromEglStreamBuffer( buf );
+			gamescope::TegraL4TCreateTextureFromEglStreamBufferWithYFlip( buf,
+				surf != nullptr && !commit->is_steam && w->type == steamcompmgr_win_type_t::XWAYLAND &&
+				surf == w->xwayland().surface.override_surface.load() &&
+				swapchain_feedback && swapchain_feedback->vk_engine_name &&
+				*swapchain_feedback->vk_engine_name == "DXVK" &&
+				pGameYFlipAppId &&
+				w->appID != 0 && (std::to_string(w->appID) == pGameYFlipAppId ||
+				 (pGameYFlipAppId[0] == '*' && pGameYFlipAppId[1] == '\0')) );
 		if ( pEglStream == nullptr )
 			return nullptr;
 		commit->vulkanTex = pEglStream;
@@ -2215,6 +2223,15 @@ int MouseCursor::y() const
 	return m_y;
 }
 
+// The Tegra final display blit reverses Y. Imported UI textures compensate
+// upstream; the CPU-uploaded cursor needs the corresponding row/hotspot and
+// screen-position transform. Leave pointer/input coordinates unchanged.
+static bool tegra_cursor_display_yflip()
+{
+    static const bool enabled = env_to_bool(getenv("GAMESCOPE_TEGRA_CURSOR_YFLIP"));
+    return gamescope::IsTegraL4TMode() && enabled;
+}
+
 bool MouseCursor::getTexture()
 {
 	uint64_t ulConnectorId = 0;
@@ -2370,6 +2387,16 @@ bool MouseCursor::getTexture()
 		// TODO: choose format & modifiers from cursor plane
 	}
 
+    if ( tegra_cursor_display_yflip() )
+    {
+        for ( uint32_t row = 0; row < surfaceHeight / 2; ++row )
+            for ( uint32_t col = 0; col < surfaceWidth; ++col )
+                std::swap(cursorBuffer[row * surfaceWidth + col],
+                          cursorBuffer[(surfaceHeight - 1 - row) * surfaceWidth + col]);
+        m_hotspotY = int(surfaceHeight) - 1 - m_hotspotY;
+        static bool logged = false;
+        if ( !logged ) { xwm_log.infof("M10N_CURSOR_YFLIP rows+hotspot+position; input unchanged"); logged = true; }
+    }
 	m_texture = vulkan_create_texture_from_bits(surfaceWidth, surfaceHeight, nContentWidth, nContentHeight, DRM_FORMAT_ARGB8888, texCreateFlags, cursorBuffer.data());
 
 	if ( pNestedFocus )
@@ -2463,6 +2490,9 @@ void MouseCursor::paint(steamcompmgr_win_t *window, steamcompmgr_win_t *fit, str
 		scaledX += ((sourceWidth / 2) - winX) * currentScaleRatio_x;
 		scaledY += ((sourceHeight / 2) - winY) * currentScaleRatio_y;
 	}
+
+    if ( tegra_cursor_display_yflip() )
+        scaledY = float(currentOutputHeight - 1) - scaledY;
 
 	bool bNested = GetBackend()->GetCurrentMouseConnector() && GetBackend()->GetCurrentMouseConnector()->GetNestedHints();
 	if ( !bNested )
@@ -2574,6 +2604,80 @@ paint_cached_base_layer(const gamescope::Rc<commit_t>& commit, const BaseLayerIn
 	layer->eAlphaBlendingMode = base.eAlphaBlendingMode;
 	layer->blackBorder = true;
 }
+
+
+// M9S opt-in viewport family. Cache only values; do not retain window pointers.
+// All access is on the existing XWM thread; no window ABI/header changes.
+static bool m9s_viewport_enabled()
+{
+    static bool enabled = env_to_bool( getenv( "GAMESCOPE_M9S_VIEWPORT" ) );
+    return enabled;
+}
+struct M9sViewportState { Window target = None; bool viewport = false; };
+struct M9sViewportAtoms { Atom target; Atom viewport; };
+static std::unordered_map<uint64_t, M9sViewportState> s_M9sViewports;
+static std::unordered_map<xwayland_ctx_t *, M9sViewportAtoms> s_M9sViewportAtoms;
+static M9sViewportAtoms m9s_viewport_atoms( xwayland_ctx_t *ctx )
+{
+    auto it = s_M9sViewportAtoms.find( ctx );
+    if ( it != s_M9sViewportAtoms.end() ) return it->second;
+    M9sViewportAtoms a = {
+        XInternAtom( ctx->dpy, "STEAM_GAMESCOPE_VIEWPORT_TARGET", false ),
+        XInternAtom( ctx->dpy, "STEAM_GAMESCOPE_VIEWPORT", false ) };
+    s_M9sViewportAtoms.emplace( ctx, a );
+    return a;
+}
+static uint32_t m9s_cardinal( xwayland_ctx_t *ctx, Window win, Atom atom )
+{
+    Atom actual = None; int format = 0; unsigned long count = 0, left = 0;
+    unsigned char *data = nullptr; uint32_t value = 0;
+    int rc = XGetWindowProperty( ctx->dpy, win, atom, 0, 1, false, XA_CARDINAL,
+        &actual, &format, &count, &left, &data );
+    if ( rc == Success && actual == XA_CARDINAL && format == 32 && count == 1 && left == 0 && data )
+        memcpy( &value, data, sizeof( value ) );
+    if ( data ) XFree( data );
+    return value;
+}
+static void m9s_refresh_viewport( steamcompmgr_win_t *w )
+{
+    if ( !m9s_viewport_enabled() || !w || w->type != steamcompmgr_win_type_t::XWAYLAND ) return;
+    auto *ctx = w->xwayland().ctx; auto a = m9s_viewport_atoms( ctx );
+    M9sViewportState state;
+    state.target = m9s_cardinal( ctx, w->xwayland().id, a.target );
+    state.viewport = m9s_cardinal( ctx, w->xwayland().id, a.viewport ) == 1;
+    s_M9sViewports[w->seq] = state;
+    // Honor the viewport's real Steam id even in a private session without -e.
+    if ( state.viewport && w->steamAppID == 769 ) w->appID = w->steamAppID;
+    if ( state.viewport || state.target )
+        xwm_log.infof( "M9S_VIEWPORT_ASSOC win=%lx target=%lx viewport=%d pid=%d",
+            (unsigned long)w->xwayland().id, (unsigned long)state.target, state.viewport, w->pid );
+    hasRepaintNonBasePlane = true;
+}
+static steamcompmgr_win_t *m9s_viewport_target( steamcompmgr_win_t *w )
+{
+    if ( !m9s_viewport_enabled() || !w || w->type != steamcompmgr_win_type_t::XWAYLAND ) return nullptr;
+    auto state = s_M9sViewports.find( w->seq );
+    if ( state == s_M9sViewports.end() || !state->second.target || state->second.target == w->xwayland().id ) return nullptr;
+    auto *target = find_win( w->xwayland().ctx, state->second.target, false );
+    if ( !target || target->pid <= 0 || target->pid != w->pid ) return nullptr;
+    auto dest = s_M9sViewports.find( target->seq );
+    return dest != s_M9sViewports.end() && dest->second.viewport ? target : nullptr;
+}
+
+// M9S: same opt-in viewport family (shared viewport toplevel). Active only
+// when the viewport opt-in is on; all other behavior is unchanged.
+static bool m9s_same_viewport_family( steamcompmgr_win_t *a, steamcompmgr_win_t *b )
+{
+    if ( !m9s_viewport_enabled() || !a || !b ) return false;
+    steamcompmgr_win_t *ta = m9s_viewport_target( a );
+    steamcompmgr_win_t *tb = m9s_viewport_target( b );
+    steamcompmgr_win_t *va = ta ? ta : a;
+    steamcompmgr_win_t *vb = tb ? tb : b;
+    if ( va != vb ) return false;
+    auto it = s_M9sViewports.find( va->seq );
+    return it != s_M9sViewports.end() && it->second.viewport;
+}
+
 
 namespace PaintWindowFlag
 {
@@ -2796,6 +2900,28 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 		if (float_is_integer(currentScaleRatio_x) && float_is_integer(currentScaleRatio_y))
 			layer->filter = GamescopeUpscaleFilter::NEAREST;
 	}
+
+
+    // Observation only, bounded to changed transforms of the explicit family.
+    if ( m9s_viewport_enabled() && w->type == steamcompmgr_win_type_t::XWAYLAND &&
+         ( m9s_viewport_target(w) || s_M9sViewports[w->seq].viewport ) )
+    {
+        char observation[768];
+        snprintf(observation, sizeof(observation),
+            "win=%lx ref=%lx geo=%dx%d+%d+%d refgeo=%dx%d+%d+%d tex=%ux%u output=%ux%u source=%dx%d base=%dx%d scale=%.6f,%.6f offset=%.3f,%.3f opacity=%.3f flags=%u layers=%zu",
+            (unsigned long)w->xwayland().id, (unsigned long)scaleW->xwayland().id,
+            w->GetGeometry().nWidth, w->GetGeometry().nHeight, w->GetGeometry().nX, w->GetGeometry().nY,
+            scaleW->GetGeometry().nWidth, scaleW->GetGeometry().nHeight, scaleW->GetGeometry().nX, scaleW->GetGeometry().nY,
+            layer->tex->width(), layer->tex->height(), currentOutputWidth, currentOutputHeight,
+            sourceWidth, sourceHeight, baseWidth, baseHeight, layer->scale.x, layer->scale.y,
+            layer->offset.x, layer->offset.y, layer->opacity, (unsigned)flags, (size_t)frameInfo->layers.count());
+        static std::unordered_map<uint64_t, std::string> previous;
+        if (previous[w->seq] != observation)
+        {
+            previous[w->seq] = observation;
+            xwm_log.infof("M9S_VIEWPORT_TRANSFORM %s", observation);
+        }
+    }
 
 	layer->eAlphaBlendingMode = ( flags & PaintWindowFlag::CoverageMode ) ? ALPHA_BLENDING_MODE_COVERAGE : ALPHA_BLENDING_MODE_PREMULTIPLIED;
 
@@ -3319,6 +3445,29 @@ paint_all( global_focus_t *pFocus, bool async )
 		nReservedLayers++;
 	if ( notification && notification->opacity )
 		nReservedLayers++;
+
+
+    // Compose adopted windows in existing X11 stacking order, using the viewport
+    // as scale/coordinate reference. No reparent, resize or focus override.
+    if ( m9s_viewport_enabled() && w && w->type == steamcompmgr_win_type_t::XWAYLAND )
+    {
+        std::vector<steamcompmgr_win_t *> family;
+        for ( auto *member = w->xwayland().ctx->list; member; member = member->xwayland().next )
+            if ( m9s_viewport_target( member ) == w && member->xwayland().a.map_state == IsViewable &&
+                 member->GetGeometry().nWidth > 1 && member->GetGeometry().nHeight > 1 && member->opacity )
+                family.push_back( member );
+        std::reverse( family.begin(), family.end() );
+        for ( auto *member : family )
+        {
+            if ( frameInfo.layers.count() >= k_nMaxLayers - nReservedLayers )
+            {
+                xwm_log.errorf( "M9S_VIEWPORT_LAYER_LIMIT viewport=%lx", (unsigned long)w->xwayland().id );
+                break;
+            }
+            const float opacity = (member->opacity / float(OPAQUE)) * (w->opacity / float(OPAQUE));
+            paint_window( pFocus, member, w, &frameInfo, pFocus->cursor, PaintWindowFlag::NoFilter, opacity );
+        }
+    }
 
 	if ( w && !w->isSteamStreamingClient && cv_paint_override_redirect_plane )
 		paint_override_underlays( pFocus, w, &frameInfo, pFocus->cursor, nReservedLayers );
@@ -4597,6 +4746,8 @@ found:;
 
 	for (steamcompmgr_win_t *w = this->list; w; w = w->xwayland().next)
 	{
+		// Adopted surfaces belong to their viewport, never independent base windows.
+		if ( m9s_viewport_target( w ) ) continue;
 		// Always skip system tray icons and overlays
 		if ( w->isSysTrayIcon || w->isOverlay || w->isExternalOverlay )
 		{
@@ -4810,6 +4961,15 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
 	// Fixes dropdowns in Steam CEF.
 	if ( keyboardFocusWindow && ctx->currentKeyboardFocusWindow && find_win( ctx, ctx->currentKeyboardFocusWindow ) == keyboardFocusWin )
 		keyboardFocusWindow = ctx->currentKeyboardFocusWindow;
+
+		// M9S: same keep-rule across toplevels of one opt-in viewport family.
+		if ( m9s_viewport_enabled() && keyboardFocusWindow && ctx->currentKeyboardFocusWindow &&
+		     find_win( ctx, ctx->currentKeyboardFocusWindow ) != keyboardFocusWin &&
+		     m9s_same_viewport_family( find_win( ctx, ctx->currentKeyboardFocusWindow ), keyboardFocusWin ) )
+		{
+			xwm_log.infof( "M9S_FOCUS_FAMILY_KEEP cur=%lx want=%lx", (unsigned long)ctx->currentKeyboardFocusWindow, (unsigned long)keyboardFocusWin->xwayland().id );
+			keyboardFocusWindow = ctx->currentKeyboardFocusWindow;
+		}
 
 	if ( ctx->focus.inputFocusWindow != inputFocus ||
 		ctx->focus.inputFocusMode != inputFocus->inputFocusMode ||
@@ -5931,6 +6091,7 @@ map_win(xwayland_ctx_t* ctx, Window id, unsigned long sequence)
 		XSetInputFocus(ctx->dpy, w->xwayland().id, RevertToNone, CurrentTime);
 	}
 
+	m9s_refresh_viewport( w );
 	handle_desktop_window( w );
 
 	MakeFocusDirty();
@@ -5955,6 +6116,7 @@ unmap_win(xwayland_ctx_t *ctx, Window id, bool fade)
 	steamcompmgr_win_t *w = find_win(ctx, id);
 	if (!w)
 		return;
+	if ( m9s_viewport_target( w ) ) hasRepaintNonBasePlane = true;
 	w->xwayland().a.map_state = IsUnmapped;
 
 	MakeFocusDirty();
@@ -6346,6 +6508,7 @@ finish_destroy_win(xwayland_ctx_t *ctx, Window id, bool gone)
 			wlserver_lock();
 			wlserver_x11_surface_info_finish( &w->xwayland().surface );
 			wlserver_unlock();
+			s_M9sViewports.erase( w->seq );
 			delete w;
 			break;
 		}
@@ -6505,8 +6668,23 @@ handle_wl_surface_id(xwayland_ctx_t *ctx, steamcompmgr_win_t *w, uint32_t surfac
 			wlserver_keyboardfocus( main_surface );
 	}
 
-	// Pull the first buffer out of that window, if needed
-	xwayland_surface_commit( current_surface );
+	// A raw transport commit consumes a one-shot ready semaphore. The real
+    // wl_surface commit already queued it (or left it pending until linking).
+    // Replaying its current buffer on an X11 association notification would
+    // consume the next generation's signal without a producer commit.
+    auto *transportTex = reinterpret_cast<VulkanWlrTexture_t *>(wlr_surface_get_texture(current_surface));
+    if ( gamescope::IsTegraL4TMode() && transportTex &&
+         gamescope::TegraL4TIsTransportBuffer(transportTex->buf) )
+    {
+        xwm_log.infof("M10K_SYNTHETIC_SKIP win=%lx surf=%p buf=%p size=%dx%d surface_id=%u",
+            (unsigned long)w->xwayland().id, (void*)current_surface, (void*)transportTex->buf,
+            transportTex->buf->width, transportTex->buf->height, surfaceID);
+    }
+    else
+    {
+        // Preserve the original pull for ordinary/EGLStream surfaces.
+        xwayland_surface_commit( current_surface );
+    }
 
 	wlserver_unlock();
 }
@@ -6922,6 +7100,15 @@ static inline float santitize_float( float f )
 static void
 handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 {
+    if ( m9s_viewport_enabled() )
+    {
+        auto a = m9s_viewport_atoms( ctx );
+        if ( ev->atom == a.target || ev->atom == a.viewport )
+        {
+            m9s_refresh_viewport( find_win( ctx, ev->window, false ) );
+            MakeFocusDirty();
+        }
+    }
 	/* check if Trans property was changed */
 	if (ev->atom == ctx->atoms.opacityAtom)
 	{
@@ -7412,6 +7599,8 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 		else if ( g_wantedUpscaleScaler != GamescopeUpscaleScaler( uScalingScaler ) )
 		{
 			g_wantedUpscaleScaler = GamescopeUpscaleScaler( uScalingScaler );
+			if ( m9s_viewport_enabled() )
+				xwm_log.infof( "M9S_SCALER_NOTIFY new=%u", uScalingScaler );
 			hasRepaint = true;
 		}
 	}
@@ -8002,6 +8191,12 @@ bool handle_done_commit( steamcompmgr_win_t *w, xwayland_ctx_t *ctx, uint64_t co
 					hasRepaintNonBasePlane = true;
 				}
 
+
+                // A new ready commit in the focused viewport family repaints
+                // the group without changing keyboard/game focus or base scale.
+                if ( m9s_viewport_target( w ) == pFocus->focusWindow && pFocus->focusWindow )
+                    hasRepaintNonBasePlane = true;
+
 				// If this is the main plane, repaint
 				if ( w == pFocus->focusWindow && !w->isSteamStreamingClient )
 				{
@@ -8357,6 +8552,8 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 	const bool bIsTransportBuffer = gamescope::IsTegraL4TMode() && gamescope::TegraL4TIsTransportBuffer( buf );
 	const bool bIsEglStreamBuffer = gamescope::IsTegraL4TMode() && gamescope::TegraL4TIsEglStreamBuffer( buf );
 
+	if (bIsTransportBuffer || bIsEglStreamBuffer)
+        xwm_log.infof("M9W_COMMIT_ENTER buf=%p surf=%p win=%lx size=%dx%d transport=%d egls=%d has_id=%d id=%u", (void*)buf,(void*)reslistentry.surf,w && w->type==steamcompmgr_win_type_t::XWAYLAND ? (unsigned long)w->xwayland().id : 0UL,buf->width,buf->height,bIsTransportBuffer,bIsEglStreamBuffer,reslistentry.present_id.has_value(),reslistentry.present_id.value_or(0));
 	if ( w == nullptr )
 	{
 		// M7f2j: final discard of a received transport commit must complete its
@@ -8772,6 +8969,12 @@ void xwayland_ctx_t::Dispatch()
 						{
 							// focus stayed within the same toplevel, keep track of it
 							ctx->currentKeyboardFocusWindow = newKeyboardFocus;
+						}
+						else if ( m9s_same_viewport_family( find_win( ctx, ctx->currentKeyboardFocusWindow ), kbw ) )
+						{
+							// M9S: in-family toplevel move; accept, do not fight CEF.
+							ctx->currentKeyboardFocusWindow = newKeyboardFocus;
+							xwm_log.infof( "M9S_FOCUS_FAMILY_ACCEPT window=%lx", (unsigned long)newKeyboardFocus );
 						}
 						else
 						{
@@ -10659,6 +10862,32 @@ steamcompmgr_main(int argc, char **argv)
 				g_upscaleFilterSharpness );
 			pPaintFocus->eUpscaleFilter = upscaleSettings.eFilter;
 			pPaintFocus->eUpscaleScaler = upscaleSettings.eScaler;
+
+            // M9W stretch-all: on this portrait Tegra arrangement the focused content
+            // must always STRETCH: the opt-in viewport family (Steam UI) and games or
+            // any other focus window alike. Steam in SteamOS mode writes
+            // GAMESCOPE_NEW_SCALING_SCALER=0 (AUTO) after startup; the generic Steam
+            // FIT/band path must not reinstate centered bands for game content of any
+            // resolution (e.g. a 640x480 fullscreen game) either.
+            if ( m9s_viewport_enabled() && gamescope::IsTegraL4TMode() &&
+                 pPaintFocus->focusWindow )
+            {
+                const bool bFamily = m9s_same_viewport_family( pPaintFocus->focusWindow, pPaintFocus->focusWindow );
+                {
+                    static std::unordered_map<uint64_t, int> s_lastStretchAllDecision;
+                    int decision = bFamily ? 1 : 0;
+                    auto it = s_lastStretchAllDecision.find( pPaintFocus->focusWindow->seq );
+                    if ( it == s_lastStretchAllDecision.end() || it->second != decision )
+                    {
+                        s_lastStretchAllDecision[pPaintFocus->focusWindow->seq] = decision;
+                        unsigned long ulWin = pPaintFocus->focusWindow->type == steamcompmgr_win_type_t::XWAYLAND ? (unsigned long)pPaintFocus->focusWindow->xwayland().id : 0UL;
+                        xwm_log.infof( "M9S_STRETCH_ALL win=%lx seq=%lu family=%d wanted=%u",
+                            ulWin, (unsigned long)pPaintFocus->focusWindow->seq, decision, uint32_t( g_wantedUpscaleScaler ) );
+                    }
+                }
+                pPaintFocus->eUpscaleScaler = GamescopeUpscaleScaler::STRETCH;
+            }
+
 			pPaintFocus->nUpscaleSharpness = upscaleSettings.nSharpness;
 
 			if ( vblank )

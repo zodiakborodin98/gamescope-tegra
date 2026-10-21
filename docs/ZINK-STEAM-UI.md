@@ -1,3 +1,6 @@
+<!-- publication-2026-10-21 -->
+**Current 2026-10-21 status:** see [the update](UPDATE-2026-10-21.md). The dated evidence and build results below are historical, not fresh acceptance of the new source snapshot.
+
 # Steam UI on Zink: measured 480p baseline, 13 October 2026
 
 The development Switch now runs **854x480 Steam GamepadUI on Zink/NVIDIA**.

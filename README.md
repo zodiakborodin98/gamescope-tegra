@@ -1,3 +1,10 @@
+<!-- publication-2026-10-21 -->
+**21 October 2026 update:** the accepted development card runs **720p Zink,
+Gamescope Composer (mode3), --steam and CEF-child GPU buffer transfer**. Current
+consumer/input sources and provider source overlays are now published.
+[Current route, fixes and remaining limitations](docs/UPDATE-2026-10-21.md).
+The older 480p sections below describe the previous profile, not today's baseline.
+
 # Gamescope for Tegra X1 / Nintendo Switch
 
 > **Development status: not suitable for everyday use.**
@@ -106,8 +113,9 @@ For local source archive verification, see [publication contents](docs/PUBLICATI
 ## Status and licensing
 
 Working Steam UI/native-game demonstrations do not imply stable FEX/Box64 gaming.
-Startup resize and teardown EGLStream faults remain open, including a reproduced
-`EGL_BAD_STATE_KHR` during the initial 1280x800 to 426x240 UI transition.
+T3 attachment resize, synthetic raw-buffer replay and idle-discard defects have
+targeted fixes. Separate startup/teardown EGLStream faults, including
+`EGL_BAD_STATE_KHR`, remain open; the full system is not universally stable.
 Gamescope screenshot is unsafe in the historical build; do not use it as a
 validation command. Compositor presents/s are not game FPS.
 

@@ -1,5 +1,11 @@
 # Graphics stack source recipes
 
+**21 October 2026:** use `mesa-zink-gpu-child` for the later mode3/720p source
+profile with GPU PBO transfer and the full unit15 synchronization fixes.
+[Preferred sources and commands](gpu-child/README.md). The older
+`mesa-zink-t3` profile below preserves the13 October baseline. Both require a
+compatible externally supplied target sysroot; no vendor runtime is bundled.
+
 **13 October 2026:** fetch/build component `mesa-zink-t3` for the measured
 Mesa 24.2.8 Steam GPU route. `mesa` still selects the historical26.0.3 profile.
 `steam-zink/` contains the open bootstrap source and exact local-CEF adjustment

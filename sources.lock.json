@@ -50,12 +50,14 @@
       "sha256": "07012116ffcb426074acdb431fa32ab245cc02fd6aff27fb3ecf2dd73805dd66"
     },
     "src/wlserver.cpp": {
-      "revision": "834f9d372a21d34bcca77c5c7480c7703be46412",
-      "sha256": "6b52e841aaeb3a23ec62d8ce13e0953dfb6141d804c29c97b3d0fc9a43f5839c"
+      "sha256": "df8e5a1fecfac4db0ec05e4181e6d11e1904e608c8cb7ea8ab8498466192f46a",
+      "origin": "M10O accepted device lineage; source-only export 2026-10-21",
+      "historical_source": "tools/m10k-returned-gate/build-consumer-trace-v2/wlserver.cpp"
     },
     "src/Backends/tegra_l4t/tegra_l4t_eglstream.cpp": {
-      "revision": "0097b5837e1ac1b7f6056587025da4ec21ec4fa0",
-      "sha256": "619cbd03113cae6b2dfdcaf854dd7874eafe453f79eac0f85d18f31c89feb723"
+      "sha256": "709a84df856361fd4e83a9a634dd8730c959fa2fbca7d9c29311c5938bc0dd67",
+      "origin": "M10O accepted device lineage; source-only export 2026-10-21",
+      "historical_source": "tools/hl2dm-frame-freeze/discard-v1/egls.cpp"
     },
     "src/Utils/Version.cpp": {
       "revision": "6867f509874f9bc52e12d6f4c4596cdf0d5be6b4",
@@ -76,6 +78,21 @@
     "src/Backends/tegra_l4t/gob_swizzle_spv.h": {
       "source": "accepted o180sx1 retained source",
       "sha256": "1104ff4d565311f1ead2d972765261c5f38cb7568c0ca8b9f3f0f4b643c89732"
+    },
+    "src/steamcompmgr.cpp": {
+      "sha256": "6d426c3f7bc5d6a128534c92258e66ee3978c8dfa487471f4d5942dc2aff1605",
+      "origin": "M10O accepted device lineage; source-only export 2026-10-21",
+      "historical_source": "tools/usb-input/cursor-build-v1/steamcompmgr.cpp"
+    },
+    "src/Backends/tegra_l4t/tegra_l4t_transport.cpp": {
+      "sha256": "a7e6d0b1d2878ba703d21629fabc58896eb99d49dcd9df860651888299e64f49",
+      "origin": "M10O accepted device lineage; source-only export 2026-10-21",
+      "historical_source": "tools/m10k-returned-gate/build-consumer-trace-v2/transport.cpp"
+    },
+    "src/Backends/TegraL4TBackend.h": {
+      "sha256": "90b900bbb92dfe5b1d35cff491ceaff25e424d104db4a2e21c050e2cae1d85d7",
+      "origin": "M9N game-orientation header, retained through M10O",
+      "historical_source": "tools/game-orientation-fix/source/Backends/TegraL4TBackend.h"
     }
   },
   "repositories": [
@@ -134,5 +151,8 @@
       "meson_packagefiles": "stb"
     }
   ],
-  "experimental_candidate_reference_sha256": "4b93ac3d60cc754cdec4e0aaf457fd21cb3176b0fbab820e48ae68abb047d43e"
+  "experimental_candidate_reference_sha256": "4b93ac3d60cc754cdec4e0aaf457fd21cb3176b0fbab820e48ae68abb047d43e",
+  "current_development_snapshot_date": "2026-10-21",
+  "current_device_reference_elf_sha256": "2df845a7214dfbb99b34eed926417df9007337ffa8f4377c330d3d5d2e93d244",
+  "current_export_requires_fresh_build_qualification": true
 }

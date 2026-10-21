@@ -1,3 +1,6 @@
+<!-- publication-2026-10-21 -->
+**Current 2026-10-21 status:** see [the update](UPDATE-2026-10-21.md). The dated evidence and build results below are historical, not fresh acceptance of the new source snapshot.
+
 # Integrating with an existing Switch Linux installation
 
 This repository is not a rootfs/driver/Steam installer. Start from your own

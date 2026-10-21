@@ -239,6 +239,12 @@ void xwayland_surface_commit(struct wlr_surface *wlr_surface) {
 	gpuvis_trace_printf( "xwayland_surface_commit wlr_surface %p", wlr_surface );
 
 	ResListEntry_t entry = PrepareCommit( wlr_surface, buf );
+    if ( gamescope::TegraL4TIsTransportBuffer( buf ) &&
+         (buf->width < 500 || (!wlserver_x11_surface_info && !wlserver_xdg_surface_info)) )
+        wl_log.infof( "M10K_ROUTE surf=%p surface_id=%u buf=%p size=%dx%d x11=%p xid=%x xdg=%p pending=%d id=%u",
+            (void*)wlr_surface, wl_resource_get_id(wlr_surface->resource), (void*)buf, buf->width, buf->height,
+            (void*)wlserver_x11_surface_info, wlserver_x11_surface_info ? wlserver_x11_surface_info->x11_id : 0,
+            (void*)wlserver_xdg_surface_info, !wlserver_x11_surface_info && !wlserver_xdg_surface_info, entry.present_id.value_or(0) );
 
 	if (wlserver_x11_surface_info)
 	{
@@ -796,6 +802,7 @@ static void gamescope_swapchain_destroy_co( struct wl_resource *resource );
 
 void gamescope_xwayland_server_t::handle_override_window_content( struct wl_client *client, struct wl_resource *gamescope_swapchain_resource, struct wlr_surface *surface, uint32_t x11_window )
 {
+    uint32_t requested_xid = x11_window;
 	x11_window = x11_find_toplevel_for_xid( this->ctx->dpy, x11_window );
 
 	wlserver_x11_surface_info *x11_surface = lookup_x11_surface_info_from_xid( this, x11_window );
@@ -821,6 +828,9 @@ void gamescope_xwayland_server_t::handle_override_window_content( struct wl_clie
 		gamescope_swapchain_destroy_co( gamescope_swapchain_resource );
 	}
 
+    wl_log.infof( "M10K_OVERRIDE requested=%x resolved=%x surf=%p surface_id=%u swap=%p x11=%p",
+        requested_xid, x11_window, (void*)surface, wl_resource_get_id(surface->resource),
+        (void*)gamescope_swapchain_resource, (void*)x11_surface );
 	struct wlserver_content_override *co = (struct wlserver_content_override *)calloc(1, sizeof(*co));
 	co->server = this;
 	co->surface = surface;

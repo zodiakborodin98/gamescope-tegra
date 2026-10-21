@@ -1,5 +1,11 @@
 # Building the source port
 
+The 21 October compositor snapshot includes the matching game-orientation header,
+raw GPU transport, replay and discard fixes. For its companion Mesa provider,
+use the [GPU-child profile](../graphics-stack/gpu-child/README.md), which also
+requires host Mako, PyYAML, PLY, Bison and Flex. Older measured build results
+remain dated; a source build does not inherit device acceptance.
+
 ## Scope
 
 Build the Gamescope executable and its WSI layer from source. This does not

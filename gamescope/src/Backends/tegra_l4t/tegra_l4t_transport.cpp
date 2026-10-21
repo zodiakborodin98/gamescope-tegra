@@ -504,7 +504,13 @@ namespace gamescope
         { tl4t_log( "FATAL: discard QueueSubmit failed" ); fflush( stderr ); _exit( 3 ); }
 
         if ( g_device.vk.WaitForFences( dev, 1, &s_Fence, VK_TRUE, 2ull * 1000ull * 1000ull * 1000ull ) != VK_SUCCESS )
-        { tl4t_log( "FATAL: discard fence timeout; not recycling pending work" ); fflush( stderr ); _exit( 3 ); }
+        {
+            // M9W discard fence slow (>2s); waiting up to +8s: under heavy system load the producer can be
+            // late by seconds; keep waiting before failing closed.
+            tl4t_log( "discard fence slow (>2s); waiting up to +8s" );
+            if ( g_device.vk.WaitForFences( dev, 1, &s_Fence, VK_TRUE, 8ull * 1000ull * 1000ull * 1000ull ) != VK_SUCCESS )
+            { tl4t_log( "FATAL: discard fence timeout; not recycling pending work" ); fflush( stderr ); _exit( 3 ); }
+        }
     }
 
     static void tl4t_ack_discard( CTegraL4TBuffer *p )
@@ -528,7 +534,8 @@ namespace gamescope
     // state is ambiguous and it fails closed with _exit(3), exactly as before.
     static OwningRc<CVulkanTexture> tl4t_gpu_copy_buffer_to_image(
         VkBuffer vkBuffer, uint32_t width, uint32_t height,
-        VkSemaphore ready, VkSemaphore returned, const char **ppFailReason )
+        VkSemaphore ready, VkSemaphore returned, const char **ppFailReason,
+        const char *origin, const void *record, uint64_t serial )
     {
         *ppFailReason = nullptr;
         VkDevice dev = g_device.device();
@@ -611,6 +618,9 @@ namespace gamescope
         si.waitSemaphoreCount = 1; si.pWaitSemaphores = &ready; si.pWaitDstStageMask = &waitStage;
         si.commandBufferCount = 1; si.pCommandBuffers = &s_Cmd;
         si.signalSemaphoreCount = 1; si.pSignalSemaphores = &returned;
+        const bool trace = width < 500 || serial < 4 || serial % 120 == 0;
+        if ( trace ) tl4t_log( "M10K_COPY_BEGIN origin=%s record=%p serial=%llu size=%ux%u ready=%p returned=%p",
+            origin, record, (unsigned long long)serial, width, height, (void*)ready, (void*)returned );
         // M7f2j boundary: after a failed QueueSubmit the queue state is unknown,
         // so the handshake is NOT re-submitted; fail closed instead. (Pre-submit
         // preparation failures above still complete as a discard: nothing was
@@ -619,8 +629,17 @@ namespace gamescope
         { tl4t_log( "FATAL: copy QueueSubmit failed; not retrying the handshake" ); fflush( stderr ); _exit( 3 ); }
 
         if ( g_device.vk.WaitForFences( dev, 1, &s_Fence, VK_TRUE, 2ull * 1000ull * 1000ull * 1000ull ) != VK_SUCCESS )
-        { tl4t_log( "FATAL: consumer copy fence timeout; not recycling pending work" ); fflush( stderr ); _exit( 3 ); }
+        {
+            // M9W consumer copy fence slow (>2s); waiting up to +28s: under heavy system load the producer can be
+            // late by seconds; keep waiting before failing closed.
+            tl4t_log( "M10K_COPY_SLOW origin=%s record=%p serial=%llu size=%ux%u ready=%p returned=%p",
+                origin, record, (unsigned long long)serial, width, height, (void*)ready, (void*)returned );
+            tl4t_log( "consumer copy fence slow (>2s); waiting up to +28s" );
+            if ( g_device.vk.WaitForFences( dev, 1, &s_Fence, VK_TRUE, 28ull * 1000ull * 1000ull * 1000ull ) != VK_SUCCESS )
+            { tl4t_log( "FATAL: consumer copy fence timeout; not recycling pending work" ); fflush( stderr ); _exit( 3 ); }
+        }
 
+        if ( trace ) tl4t_log( "M10K_COPY_DONE origin=%s record=%p serial=%llu", origin, record, (unsigned long long)serial );
         return pTex;
     }
 
@@ -637,7 +656,7 @@ namespace gamescope
 
         const char *pFailReason = nullptr;
         OwningRc<CVulkanTexture> pTex = tl4t_gpu_copy_buffer_to_image(
-            p->vkBuffer, p->width, p->height, p->ready, p->returned, &pFailReason );
+            p->vkBuffer, p->width, p->height, p->ready, p->returned, &pFailReason, "raw", p, p->commit_serial );
         if ( pTex == nullptr )
         {
             char reason[64];
@@ -821,7 +840,7 @@ namespace gamescope
             return nullptr;
         const char *pFail = nullptr;
         OwningRc<CVulkanTexture> pTex = tl4t_gpu_copy_buffer_to_image(
-            pSlot->vkBuffer, pSlot->width, pSlot->height, pSlot->ready, pSlot->returned, &pFail );
+            pSlot->vkBuffer, pSlot->width, pSlot->height, pSlot->ready, pSlot->returned, &pFail, "egls-exported", pSlot, 0 );
         if ( pTex == nullptr )
         {
             tl4t_log( "slot copy failed: %s (completing handshake as discard)", pFail ? pFail : "?" );

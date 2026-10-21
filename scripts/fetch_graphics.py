@@ -18,21 +18,35 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def tree_hash(source):
+    source = Path(source).resolve()
     result = hashlib.sha256()
+
+    def link_bytes(path):
+        target = os.readlink(path)
+        if Path(target).is_absolute() or not path.resolve().is_relative_to(source):
+            raise ValueError('Source symlink escapes source tree: ' + path.relative_to(source).as_posix())
+        return target.encode()
+
     for base, dirs, files in os.walk(source, followlinks=False):
         dirs[:] = sorted(d for d in dirs if d != '.git')
+        links = []
         for name in dirs:
             path = Path(base) / name
             if path.is_symlink():
-                raise ValueError('Source directory symlink is not supported: ' + path.relative_to(source).as_posix())
+                data = link_bytes(path)
+                result.update(b'symlink\0' + path.relative_to(source).as_posix().encode()
+                              + b'\0' + str(len(data)).encode() + b'\0' + data + b'\0')
+                links.append(name)
+                continue
             result.update(b'directory\0' + path.relative_to(source).as_posix().encode() + b'\0')
+        dirs[:] = [name for name in dirs if name not in links]
         for name in sorted(files):
             path = Path(base) / name
             rel = path.relative_to(source).as_posix()
             if rel == '.source-receipt.json':
                 continue
             kind = b'symlink' if path.is_symlink() else b'file'
-            data = os.readlink(path).encode() if path.is_symlink() else path.read_bytes()
+            data = link_bytes(path) if path.is_symlink() else path.read_bytes()
             executable = b'1' if not path.is_symlink() and path.stat().st_mode & 0o111 else b'0'
             result.update(kind + b'\0' + rel.encode() + b'\0' + executable + b'\0')
             result.update(str(len(data)).encode() + b'\0' + data + b'\0')

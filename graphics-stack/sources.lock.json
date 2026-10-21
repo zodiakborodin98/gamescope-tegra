@@ -82,6 +82,50 @@
         "src/glx/meson.build": "841735058e8494f1892e25162fdecaa3fa4c0989ed55ad3b1a8d19bd15fcee93",
         "src/util/m7g_t3.h": "fa75a7b4eedb1b823fce56a6fb29fe1339039b6508fadeaaee921d9116c25e90"
       }
+    },
+    "mesa-zink-gpu-child": {
+      "kind": "tar",
+      "url": "https://archive.mesa3d.org/mesa-24.2.8.tar.xz",
+      "version": "24.2.8",
+      "sha256": "999d0a854f43864fc098266aaf25600ce7961318a1e2e358bff94a7f53580e30",
+      "size": 29622208,
+      "upstream_license": "Retain Mesa file notices; new T3 implementation GPL-2.0-or-later",
+      "patches": [
+        "mesa-24.2.8-zink-t3.patch",
+        "mesa-24.2.8-zink-gpu-child.patch"
+      ],
+      "patch_sha256": {
+        "mesa-24.2.8-zink-t3.patch": "94c4b75b0be8ddccb80269fba0a27ee324f6b1c0a1b00f30bb62e44b4e285c1e",
+        "mesa-24.2.8-zink-gpu-child.patch": "97831507883c51c89e1074dac0c793c41c0f4bd3881a5c885a0d1fb24dbe5af6"
+      },
+      "historical_device_profile": "M10K full unit15 GPU child / GLX reassert / Gallium wait; fresh public build not hardware acceptance",
+      "patched_sources_sha256": {
+        "meson_options.txt": "936a989b8f2c665b013f92d308f52fd7e1c49eb569c85bbcb9b6f8ff601e2c22",
+        "src/gallium/drivers/zink/zink_context.c": "c1779ee9550ddd5212aab2a308b01f3169b1148531007a13481e09bf64fb09fd",
+        "src/gallium/drivers/zink/zink_fence.c": "46ce5bcd2dd4aafd4a451dbba759666be8a42102a7fd676d4cea190c819a527b",
+        "src/gallium/drivers/zink/zink_render_pass.c": "f96b48ee417edd884224f4f40b8b98df453a5694122c679d07a4f61a8c427dd6",
+        "src/gallium/drivers/zink/zink_resource.c": "c4e4878a2b8f163cea66dcf385e12fd422b585d446c19f946bb4558057bd75c1",
+        "src/gallium/drivers/zink/zink_screen.c": "e8cff9bad63724db66bcbad77e78012622263e05f8b9503ec0a9f19e0a0b75a1",
+        "src/gallium/frontends/dri/kopper.c": "57ea8a75f1611cda9cf66d5c45118893ee382da654a9f9f6b534ce4ca50a5ad3",
+        "src/glx/drisw_glx.c": "244b0016bb020abc259355e04f53038329f6dcb35d79e03a18b377395f1313cc",
+        "src/glx/glxcurrent.c": "b3c133bfa5ac4cc445543f698de3aece7dff22605939710a7e25ee2d362898ad",
+        "src/glx/m7g-t3/geometry-defer.h": "1069e1d94a3e3aa0c372df2dce4239f60dbdb841e023af075463259149def614",
+        "src/glx/m7g-t3/m7g_t3_adapter.c": "881033aa1275eb53f54e63675d0bacda95b8ecab6c3acdc0977b3a6ccbc0c75b",
+        "src/glx/m7g-t3/m7g_t3_adapter.h": "8cfe85a61f6b1cffad1cd6b27ba59e4c9d1a71b2c42bba7f359ed75265f18d6f",
+        "src/glx/m7g-t3/m7g_t3_transport.h": "e0696b91b7428ba2c0925a2df055d757b38df9b243ab88753fac9327f1a27a12",
+        "src/glx/m7g-t3/m7g_t3_transport_stub.c": "7beeff835379dc12467c7e83f8f9c472679e92f887f1b3806fe632a2f9f30dcb",
+        "src/glx/m7g-t3/m7g_t3_transport_vk.c": "1f37467a4c0c0524512e80d10582d493caea47d965d65eae209a81ea01d8debe",
+        "src/glx/m7g-t3/m9w-gpu.c": "602c410967dce71a4d7681f3fffcf5bd170b8c673d435fab1c1a2ab892cf8d5b",
+        "src/glx/m7g-t3/m9w-gpu.h": "b9ba8253d52160f17b60095486240785728a589de9130ed305e8b9732888b336",
+        "src/glx/m7g-t3/protocol/gamescope-swapchain-client-protocol.h": "fd494c9f6393e69610fe356e1fb74aedfb3e1df04768cd5c7c01c178503a4b54",
+        "src/glx/m7g-t3/protocol/gamescope-swapchain-protocol.c": "880492f90c2b14389265198c063c5be9cf5c0656cf8de050be8e063cc0412ff5",
+        "src/glx/m7g-t3/protocol/tegra-l4t-buffer-client-protocol.h": "132878f3a858d54c333c338ee7ad0f173503752b937e1d6484d96eb6d47713d2",
+        "src/glx/m7g-t3/protocol/tegra-l4t-buffer-protocol.c": "194d7b688957bde5662c0873be09c7fe2f057a2d2f60e69cd5a33bfa929af4fc",
+        "src/glx/m7g-t3/release-gate.h": "3a3593a6f5b0cbe3365802c9d395c1de9d432260d6b760577ccce63b6a641637",
+        "src/glx/meson.build": "32aecf6179b181697383034ad4b74313240d4ea375139ab0db5ede6300467973",
+        "src/mesa/state_tracker/st_cb_readpixels.c": "41fb09ac3e0193a5d610f97b042bd68b797177bef23488f4ecf053ea6b6cd9b6",
+        "src/util/m7g_t3.h": "2f76cd86d6cb35fcbcd2b9e7da6255678be628d8fbf6e6077ac20d591d26f5cf"
+      }
     }
   },
   "llvm": {

@@ -30,13 +30,22 @@ class GraphicsSourceTests(unittest.TestCase):
         (self.source / '.source-receipt.json').write_text('receipt')
         self.assertEqual(before, tree_hash(self.source))
 
-    def test_directory_symlink_refused(self):
+    def test_internal_directory_symlink_is_hashed_without_recursing(self):
         (self.source / 'real').mkdir()
         try:
             (self.source / 'link').symlink_to('real', target_is_directory=True)
         except OSError:
             self.skipTest('symlink creation requires host privileges')
-        with self.assertRaisesRegex(ValueError, 'directory symlink'):
+        before = tree_hash(self.source)
+        (self.source / 'link').unlink()
+        self.assertNotEqual(before, tree_hash(self.source))
+
+    def test_directory_symlink_cannot_escape_source(self):
+        try:
+            (self.source / 'escape').symlink_to('..', target_is_directory=True)
+        except OSError:
+            self.skipTest('symlink creation requires host privileges')
+        with self.assertRaisesRegex(ValueError, 'escapes source tree'):
             tree_hash(self.source)
 
     def test_file_symlink_not_equivalent_to_regular_file(self):

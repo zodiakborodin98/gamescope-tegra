@@ -31,7 +31,7 @@ def validate_llvm_metadata(metadata):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('component', choices=('mesa', 'mesa-zink-t3', 'xwayland', 'wayland', 'egl-wayland'))
+    ap.add_argument('component', choices=('mesa', 'mesa-zink-t3', 'mesa-zink-gpu-child', 'xwayland', 'wayland', 'egl-wayland'))
     ap.add_argument('--source', type=Path, required=True)
     ap.add_argument('--sysroot', type=Path, required=True)
     ap.add_argument('--build-dir', type=Path, required=True)
@@ -41,8 +41,8 @@ def main():
     ap.add_argument('--jobs', type=int, default=2)
     args = ap.parse_args()
     if args.profile is None:
-        args.profile = 'zink' if args.component == 'mesa-zink-t3' else 'llvmpipe'
-    if args.component == 'mesa-zink-t3' and args.profile != 'zink':
+        args.profile = 'zink' if args.component.startswith('mesa-zink-') else 'llvmpipe'
+    if args.component.startswith('mesa-zink-') and args.profile != 'zink':
         raise SystemExit('The qualified T3 source profile requires Zink, not llvmpipe')
     source, sysroot, build = args.source.resolve(strict=True), args.sysroot.resolve(strict=True), args.build_dir.resolve()
     if build.exists() or build.is_symlink() or args.jobs < 1:
@@ -84,7 +84,7 @@ def main():
                    '-Dvulkan-drivers=', '-Dvalgrind=disabled', '-Dlibunwind=disabled', '-Dlmsensors=disabled',
                    '-Dbuild-tests=false', '-Dtools=', '-Dvideo-codecs=', '-Dzstd=enabled', '-Dexpat=enabled',
                    '-Dxlib-lease=disabled', '-Dgallium-va=disabled', '-Dgallium-rusticl=false']
-        if args.component == 'mesa-zink-t3':
+        if args.component.startswith('mesa-zink-'):
             options += ['-Dm7g-t3-transport=vk']
     elif args.component == 'xwayland':
         options = ['-Dxwayland_eglstream=true', '-Dxvfb=false', '-Ddocs=false', '-Ddevel-docs=false', '-Dxwayland_ei=false']

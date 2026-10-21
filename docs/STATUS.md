@@ -1,3 +1,6 @@
+<!-- publication-2026-10-21 -->
+**Current 2026-10-21 status:** see [the update](UPDATE-2026-10-21.md). The dated evidence and build results below are historical, not fresh acceptance of the new source snapshot.
+
 # Evidence and limits (2026-10-12)
 
 **Update 13 October 2026:** the tested development Switch now has a persistent

@@ -1,3 +1,6 @@
+<!-- publication-2026-10-21 -->
+**Current 2026-10-21 status:** see [the update](UPDATE-2026-10-21.md). The dated evidence and build results below are historical, not fresh acceptance of the new source snapshot.
+
 # Tegra source provenance
 
 Publication snapshot prepared 2026-10-12. The immutable build-input inventory
@@ -171,4 +174,3 @@ Fetched upstream dependency pins and source-input hashes are in
 `sources.lock.json`. License notices accompany source, not private test logs.
 This source package excludes private runtime/driver/Steam payloads and does
 not import the private development repository's git history.
-
